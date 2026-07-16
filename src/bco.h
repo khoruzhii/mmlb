@@ -1,29 +1,27 @@
 #pragma once
 
-#include <array>
+#include "types.h"
+
 #include <bit>
-#include <cstdint>
 #include <vector>
 
 namespace fgs::bco {
 
-using Tensor = std::array<std::uint64_t, 12>;
-
 struct Transvection {
-    std::uint8_t axis;
-    std::uint8_t source;
-    std::uint8_t target;
+    U8 axis;
+    U8 source;
+    U8 target;
 };
 
-inline std::uint16_t nnz(const Tensor &tensor);
-inline std::uint16_t optimize(Tensor &tensor);
-inline std::uint16_t optimize(Tensor &tensor,
-                              std::vector<Transvection> &transvections);
+inline U16 nnz(const Tensor &tensor);
+inline U16 optimize(Tensor &tensor);
+inline U16 optimize(Tensor &tensor,
+                    std::vector<Transvection> &transvections);
 
-inline std::uint16_t nnz(const Tensor &tensor) {
-    std::uint16_t weight = 0;
-    for (const std::uint64_t word : tensor) {
-        weight = static_cast<std::uint16_t>(weight + std::popcount(word));
+inline U16 nnz(const Tensor &tensor) {
+    U16 weight = 0;
+    for (const U64 word : tensor) {
+        weight = static_cast<U16>(weight + std::popcount(word));
     }
     return weight;
 }
@@ -41,7 +39,7 @@ inline int tensor_bit(int axis, int coordinate, int first, int second) {
 }
 
 inline bool get_bit(const Tensor &tensor, int bit) {
-    return (tensor[bit / 64] & (std::uint64_t{1} << (bit % 64))) != 0;
+    return (tensor[bit / 64] & (U64{1} << (bit % 64))) != 0;
 }
 
 inline int delta(const Tensor &tensor, int axis, int source, int target) {
@@ -64,16 +62,15 @@ inline void apply(Tensor &tensor, int axis, int source, int target) {
             const int source_bit = tensor_bit(axis, source, first, second);
             if (get_bit(tensor, source_bit)) {
                 const int target_bit = tensor_bit(axis, target, first, second);
-                tensor[target_bit / 64] ^= std::uint64_t{1}
-                                           << (target_bit % 64);
+                tensor[target_bit / 64] ^= U64{1} << (target_bit % 64);
             }
         }
     }
 }
 
-inline std::uint16_t optimize_impl(Tensor &tensor,
-                                   std::vector<Transvection> *transvections) {
-    std::uint16_t steps = 0;
+inline U16 optimize_impl(Tensor &tensor,
+                         std::vector<Transvection> *transvections) {
+    U16 steps = 0;
     while (true) {
         int best_delta = 0;
         int best_axis = 0;
@@ -100,9 +97,9 @@ inline std::uint16_t optimize_impl(Tensor &tensor,
         }
         apply(tensor, best_axis, best_source, best_target);
         if (transvections != nullptr) {
-            transvections->push_back({static_cast<std::uint8_t>(best_axis),
-                                      static_cast<std::uint8_t>(best_source),
-                                      static_cast<std::uint8_t>(best_target)});
+            transvections->push_back({static_cast<U8>(best_axis),
+                                      static_cast<U8>(best_source),
+                                      static_cast<U8>(best_target)});
         }
         ++steps;
     }
@@ -110,14 +107,14 @@ inline std::uint16_t optimize_impl(Tensor &tensor,
 
 // Apply the best nnz-reducing coordinate transvection until a strict local
 // minimum is reached. Returns the number of applied transvections.
-inline std::uint16_t optimize(Tensor &tensor) {
+inline U16 optimize(Tensor &tensor) {
     return optimize_impl(tensor, nullptr);
 }
 
 // Also record the coordinate changes so a decomposition of the optimized
 // tensor can be mapped back to the original tensor.
-inline std::uint16_t optimize(Tensor &tensor,
-                              std::vector<Transvection> &transvections) {
+inline U16 optimize(Tensor &tensor,
+                    std::vector<Transvection> &transvections) {
     transvections.clear();
     return optimize_impl(tensor, &transvections);
 }

@@ -1,8 +1,9 @@
 #pragma once
 
+#include "types.h"
+
 #include <array>
 #include <cstddef>
-#include <cstdint>
 #include <limits>
 #include <random>
 #include <stdexcept>
@@ -11,17 +12,9 @@
 
 namespace fgs {
 
-using U8 = std::uint8_t;
-using U16 = std::uint16_t;
-using U32 = std::uint32_t;
-using U64 = std::uint64_t;
-
 // A CP scheme over F_2. Each term is (u, v, w), with every factor stored as a
 // bit vector of dimension at most 9. A zero factor denotes a dead term slot.
 struct Scheme {
-    using Term = std::array<U16, 3>;
-    using Shape = std::array<U8, 3>;
-
     static constexpr int kMaxDimension = 9;
     static constexpr std::size_t kMaxTerms = 1000;
     static constexpr std::size_t kValueCount = 1U << kMaxDimension;
