@@ -39,7 +39,7 @@ void benchmark(int a, int b, int c, U8 target_lb) {
 
 int main() {
     benchmark(2, 2, 2, 7);
+    benchmark(2, 2, 3, 10);
     benchmark(2, 2, 3, 11);
-    benchmark(3, 3, 3, 15);
     return 0;
 }

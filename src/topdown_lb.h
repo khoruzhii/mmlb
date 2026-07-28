@@ -7,6 +7,7 @@
 #include "support.h"
 
 #include <vector>
+#include <map>
 
 #include <iostream>
 #include <string>
@@ -41,6 +42,20 @@ inline std::string get_indent(int depth) {
     return std::string(depth * 2, ' ');
 }
 
+inline std::map<std::pair<Tensor, U8>, bool> lb_cache;
+inline std::map<Tensor, U8> ub_cache;
+
+inline U8 get_ub(const Tensor& t, int flips) {
+    Tensor t_norm = t;
+    proj::normalize(t_norm);
+    if (ub_cache.find(t_norm) != ub_cache.end()) {
+        return ub_cache[t_norm];
+    }
+    U8 res = ub(t_norm, flips);
+    ub_cache[t_norm] = res;
+    return res;
+}
+
 inline bool topdown_lb(const Tensor &tensor, U8 conjectured_rank, U8 target_lb, int depth = 0) {
     if (target_lb == 0) return true;
 
@@ -51,10 +66,16 @@ inline bool topdown_lb(const Tensor &tensor, U8 conjectured_rank, U8 target_lb, 
         return false; // rank is 0, which is < target_lb since target_lb > 0
     }
 
-    // 1. Flattening lower bound
-    if (flat_rank(t, shape) >= target_lb) {
-        return true;
+    auto key = std::make_pair(t, target_lb);
+    if (lb_cache.find(key) != lb_cache.end()) {
+        return lb_cache[key];
     }
+
+    auto solve = [&]() -> bool {
+        // 1. Flattening lower bound
+        if (flat_rank(t, shape) >= target_lb) {
+            return true;
+        }
 
     // 2. Sub-orbits
     std::vector<proj::Projection> all_orbits = proj::sub_orbits(t);
@@ -77,7 +98,7 @@ inline bool topdown_lb(const Tensor &tensor, U8 conjectured_rank, U8 target_lb, 
         U8 min_proj_rank = 255;
         int orbit_idx = 1;
         for (const auto& p : orbits_by_axis[axis]) {
-            U8 r = ub(p.tensor, 100000);
+            U8 r = get_ub(p.tensor, 100000);
             proj_ranks.push_back(r);
             
             std::cout << get_indent(depth) << "ORBIT " << orbit_idx++ << "/" << orbits_by_axis[axis].size() 
@@ -100,8 +121,19 @@ inline bool topdown_lb(const Tensor &tensor, U8 conjectured_rank, U8 target_lb, 
         }
         
         if (min_proj_rank >= target_lb - 1) {
-            std::cout << get_indent(depth) << "Proved target lower bound via min_proj_rank >= " << (int)(target_lb - 1) << " on axis " << axis << ".\n";
-            return true;
+            bool all_proved = true;
+            for (std::size_t i = 0; i < orbits_by_axis[axis].size(); ++i) {
+                std::cout << get_indent(depth) << "Trying to prove lower bound of " << (int)(target_lb - 1) << " on orbit " << (i+1) << "...\n";
+                if (!topdown_lb(orbits_by_axis[axis][i].tensor, proj_ranks[i], target_lb - 1, depth + 1)) {
+                    std::cout << get_indent(depth) << "Failed to prove orbit " << (i+1) << ".\n";
+                    all_proved = false;
+                    break;
+                }
+            }
+            if (all_proved) {
+                std::cout << get_indent(depth) << "Proved target lower bound via sub-orbits on axis " << axis << ".\n";
+                return true;
+            }
         }
     }
     
@@ -117,13 +149,13 @@ inline bool topdown_lb(const Tensor &tensor, U8 conjectured_rank, U8 target_lb, 
             if (forced::factor_rank_one(M, res.shape[1], left, right)) {
                 // 1. Project on axis 1 using 'left'
                 Tensor proj1 = proj::project_tensor(transformed, res.shape, 1, left);
-                if (topdown_lb(proj1, ub(proj1, 100000), target_lb - 1, depth + 1)) {
+                if (topdown_lb(proj1, get_ub(proj1, 100000), target_lb - 1, depth + 1)) {
                     return true;
                 }
                 
                 // 2. Project on axis 2 using 'right'
                 Tensor proj2 = proj::project_tensor(transformed, res.shape, 2, right);
-                if (topdown_lb(proj2, ub(proj2, 100000), target_lb - 1, depth + 1)) {
+                if (topdown_lb(proj2, get_ub(proj2, 100000), target_lb - 1, depth + 1)) {
                     return true;
                 }
                 
@@ -137,7 +169,7 @@ inline bool topdown_lb(const Tensor &tensor, U8 conjectured_rank, U8 target_lb, 
                     Tensor T_minus_term = transformed;
                     proj::add_term(T_minus_term, term);
                     
-                    if (!topdown_lb(T_minus_term, ub(T_minus_term, 100000), target_lb - 1, depth + 1)) {
+                    if (!topdown_lb(T_minus_term, get_ub(T_minus_term, 100000), target_lb - 1, depth + 1)) {
                         all_branches_proved = false;
                         break;
                     }
@@ -150,6 +182,11 @@ inline bool topdown_lb(const Tensor &tensor, U8 conjectured_rank, U8 target_lb, 
     }
 
     return false;
+    }; // end of solve lambda
+    
+    bool result = solve();
+    lb_cache[key] = result;
+    return result;
 }
 
 } // namespace fgs

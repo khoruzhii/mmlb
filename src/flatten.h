@@ -1,6 +1,6 @@
 #pragma once
 
-#include "scheme.h"
+#include "support.h"
 #include "types.h"
 
 #include <algorithm>
@@ -75,7 +75,7 @@ struct BitMatrix {
 
 enum class FlatteningType { AB_C, AC_B, BC_A };
 
-inline BitMatrix basic_flatten(const Scheme &scheme, const Shape &shape,
+inline BitMatrix basic_flatten(const Tensor &tensor, const Shape &shape,
                                FlatteningType type) {
     int component0 = 0, component1 = 1, component2 = 2;
     if (type == FlatteningType::AC_B) {
@@ -93,31 +93,28 @@ inline BitMatrix basic_flatten(const Scheme &scheme, const Shape &shape,
 
     BitMatrix mat(dim0 * dim1, dim2);
 
-    const auto &terms = scheme.terms();
-
-    for (U16 l : scheme.live) {
-        const auto &term = terms[l];
-        for (std::size_t i = 0; i < dim0; ++i) {
-            if (((term[component0] >> i) & 1) == 0) {
-                continue;
-            }
-            for (std::size_t j = 0; j < dim1; ++j) {
-                if (((term[component1] >> j) & 1) == 0) {
-                    continue;
+    for (std::size_t i = 0; i < dim0; ++i) {
+        for (std::size_t j = 0; j < dim1; ++j) {
+            for (std::size_t k = 0; k < dim2; ++k) {
+                std::array<int, 3> coords;
+                coords[component0] = i;
+                coords[component1] = j;
+                coords[component2] = k;
+                
+                if (proj::tensor_bit(tensor, coords[0], coords[1], coords[2])) {
+                    const std::size_t row = i * dim1 + j;
+                    mat.rows[row][k / 64] ^= (U64{1} << (k % 64));
                 }
-                const std::size_t row = i * dim1 + j;
-                // Scheme factors have at most nine bits, so one word suffices.
-                mat.rows[row][0] ^= static_cast<U64>(term[component2]);
             }
         }
     }
     return mat;
 }
 
-inline std::size_t flat_rank(const Scheme &scheme, const Shape &shape) {
-    BitMatrix ab_c = basic_flatten(scheme, shape, FlatteningType::AB_C);
-    BitMatrix ac_b = basic_flatten(scheme, shape, FlatteningType::AC_B);
-    BitMatrix bc_a = basic_flatten(scheme, shape, FlatteningType::BC_A);
+inline std::size_t flat_rank(const Tensor &tensor, const Shape &shape) {
+    BitMatrix ab_c = basic_flatten(tensor, shape, FlatteningType::AB_C);
+    BitMatrix ac_b = basic_flatten(tensor, shape, FlatteningType::AC_B);
+    BitMatrix bc_a = basic_flatten(tensor, shape, FlatteningType::BC_A);
     return std::max({ab_c.rank(), ac_b.rank(), bc_a.rank()});
 }
 
