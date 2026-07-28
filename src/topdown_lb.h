@@ -97,6 +97,7 @@ inline bool topdown_lb(const Tensor &tensor, U8 conjectured_rank, U8 target_lb, 
         
         U8 min_proj_rank = 255;
         int orbit_idx = 1;
+        bool possible_suborbits = true;
         for (const auto& p : orbits_by_axis[axis]) {
             U8 r = get_ub(p.tensor, 100000);
             proj_ranks.push_back(r);
@@ -118,9 +119,16 @@ inline bool topdown_lb(const Tensor &tensor, U8 conjectured_rank, U8 target_lb, 
             if (r < min_proj_rank) {
                 min_proj_rank = r;
             }
+            
+            if (r < target_lb - 1) {
+                possible_suborbits = false;
+                std::cout << get_indent(depth) << "Upper bound " << (int)r << " is < " << (int)(target_lb - 1) 
+                          << ", abandoning sub-orbits on this axis.\n";
+                break;
+            }
         }
         
-        if (min_proj_rank >= target_lb - 1) {
+        if (possible_suborbits && min_proj_rank >= target_lb - 1) {
             bool all_proved = true;
             for (std::size_t i = 0; i < orbits_by_axis[axis].size(); ++i) {
                 std::cout << get_indent(depth) << "Trying to prove lower bound of " << (int)(target_lb - 1) << " on orbit " << (i+1) << "...\n";
@@ -147,34 +155,29 @@ inline bool topdown_lb(const Tensor &tensor, U8 conjectured_rank, U8 target_lb, 
             Matrix M = forced::slice(transformed, res.shape, 0, coord);
             U16 left = 0, right = 0;
             if (forced::factor_rank_one(M, res.shape[1], left, right)) {
-                // 1. Project on axis 1 using 'left'
-                Tensor proj1 = proj::project_tensor(transformed, res.shape, 1, left);
-                if (topdown_lb(proj1, get_ub(proj1, 100000), target_lb - 1, depth + 1)) {
-                    return true;
-                }
-                
-                // 2. Project on axis 2 using 'right'
-                Tensor proj2 = proj::project_tensor(transformed, res.shape, 2, right);
-                if (topdown_lb(proj2, get_ub(proj2, 100000), target_lb - 1, depth + 1)) {
-                    return true;
-                }
-                
-                // 3. Branch over all c
+                // Branch over all c
                 bool all_branches_proved = true;
                 std::size_t num_elements = std::size_t{1} << res.shape[0];
+                int valid_branches = 0;
                 for (U16 c = 1; c < num_elements; ++c) {
                     if ((c & (1 << coord)) == 0) continue;
+                    valid_branches++;
                     
                     Term term = { c, left, right };
                     Tensor T_minus_term = transformed;
                     proj::add_term(T_minus_term, term);
                     
+                    std::cout << get_indent(depth) << "Forced product branch " << valid_branches 
+                              << ". Trying to prove lower bound of " << (int)(target_lb - 1) << "...\n";
+                    
                     if (!topdown_lb(T_minus_term, get_ub(T_minus_term, 100000), target_lb - 1, depth + 1)) {
                         all_branches_proved = false;
+                        std::cout << get_indent(depth) << "Failed forced product branch.\n";
                         break;
                     }
                 }
-                if (all_branches_proved) {
+                if (all_branches_proved && valid_branches > 0) {
+                    std::cout << get_indent(depth) << "Proved target lower bound via forced products.\n";
                     return true;
                 }
             }
