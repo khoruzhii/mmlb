@@ -14,7 +14,7 @@ class Tensor {
         return get_bit(i, j, k);
     }
 
-    U_16 operator[](size_t i, size_t j) const {
+    U16 operator[](size_t i, size_t j) const {
         return (data[4*i + j/4] >> (16*(j%4))) & U64(0xFFFF);
     }
 
