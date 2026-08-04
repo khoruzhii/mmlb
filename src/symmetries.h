@@ -3,7 +3,7 @@
 #include <vector>
 #include <bit>
 
-namespace symmetries {
+
 // Computing the full group of symmetries is too hard. Instead we use the following approach:
 // Suppose that T lies in A * B * C and that U acts only on A, V acts on B and W acts on C. 
 // (U,V,W) form a symmetry if U(V(W(T))) = T.
@@ -14,11 +14,14 @@ namespace symmetries {
 // Next we check if the (X,Y,Z) found correspond to (U,V,W) that are actually symmetries.
 
 
-Matrix annihilator_matrix(Tensor& T) {
+Matrix annihilator_matrix(Tensor& T, U16 lock_u, U16 lock_v) { // lock_u and lock_v will be zero for getting symmetries usually. These are for getting orbits of all rank one tensors
     size_t sa = T.shape[0];
     size_t sb = T.shape[1];
     size_t sc = T.shape[2];
-    Matrix M(sa*sb*sc, sa*sa+sb*sb+sc*sc); // 
+    size_t extra_rows = 0;
+    if (lock_u) extra_rows += sa;
+    if (lock_v) extra_rows += sb;
+    Matrix M(sa*sb*sc + extra_rows, sa*sa+sb*sb+sc*sc);
     size_t row_idx = 0;
     for (size_t i = 0; i < sa; i++) {
         for (size_t j = 0; j < sb; j++) {
@@ -36,14 +39,37 @@ Matrix annihilator_matrix(Tensor& T) {
             }
         }
     }
+
+    // this is only for if lock_u and lock_v are non-zero
+    if (lock_u) {
+        for (size_t i = 0; i < sa; i++) {
+            for (size_t X = 0; X < sa; X++) {
+                if ((lock_u >> X) & 1) {
+                    M.set(row_idx, i*sa + X, true);
+                }
+            }
+            row_idx++;
+        }
+    }
+    if (lock_v) {
+        for (size_t j = 0; j < sb; j++) {
+            for (size_t Y = 0; Y < sb; Y++) {
+                if ((lock_v >> Y) & 1) {
+                    M.set(row_idx, sa*sa + j*sb + Y, true);
+                }
+            }
+            row_idx++;
+        }
+    }
+
     return M;
 }
 
-std::vector<std::vector<U64>> get_candidate_symmetries(Tensor& T) {
+std::vector<std::vector<U64>> get_candidate_symmetries(Tensor& T, U16 lock_u, U16 lock_v) {
     size_t sa = T.shape[0];
     size_t sb = T.shape[1];
     size_t sc = T.shape[2];
-    Matrix M = annihilator_matrix(T);
+    Matrix M = annihilator_matrix(T, lock_u, lock_v);
     auto nullspace = M.right_nullspace_basis(); // this is a basis for (X,Y,Z) such that (X+Y+Z)T = 0.
     std::vector<std::vector<U64>> symmetries;
     for (auto& short_vec : nullspace) {
@@ -139,8 +165,8 @@ bool is_symmetry(Tensor& T, std::vector<U64>& vec) {
     return T == T3; // We need to have a == operator on tensors!
 }
 
-std::vector<std::vector<U64>> symmetry_generators(Tensor& T) {
-    std::vector<std::vector<U64>> candidates = get_candidate_symmetries(T);
+std::vector<std::vector<U64>> symmetry_generators(Tensor& T, U16 lock_u = 0, U16 lock_v = 0) {
+    std::vector<std::vector<U64>> candidates = get_candidate_symmetries(T, lock_u, lock_v);
     std::vector<std::vector<U64>> symmetries;
     
     for (auto& candidate : candidates) {
@@ -161,11 +187,12 @@ U16 apply_symmetry(const std::vector<U64>& sym, U16 vec, size_t dim, int axis) {
     return out;
 }
 
-std::vector<std::vector<U16>> get_all_orbits(const std::vector<std::vector<U64>>& symmetries, size_t dim, int axis) {
+std::vector<U16> get_orbit_reps(const std::vector<std::vector<U64>>& symmetries, size_t dim, int axis) {
     std::vector<bool> visited(1 << dim, false);
-    std::vector<std::vector<U16>> orbits;
+    std::vector<U16> reps;
     for (size_t v0 = 0; v0 < (1 << dim); v0++) {
         if (visited[v0]) continue;
+        reps.push_back(v0);
         std::vector<U16> orbit;
         orbit.push_back(v0);
         visited[v0] = true;
@@ -181,9 +208,27 @@ std::vector<std::vector<U16>> get_all_orbits(const std::vector<std::vector<U64>>
                 }
             }
         }
-        orbits.push_back(orbit);
     }
-    return orbits;
+    return reps;
 }
 
-} // namespace symmetries
+std::vector<Term> get_rank1_orbits(Tensor& T) {
+    std::vector<Term> rank1_orbits;
+    auto symmetries_init = symmetry_generators(T);
+    auto orbits_A = get_orbit_reps(symmetries_init, T.shape[0], 0);
+    for (U16 u: orbits_A) {
+        if (u==0) continue;
+        auto symmetries_locked_u = symmetry_generators(T, u);
+        auto orbits_B = get_orbit_reps(symmetries_locked_u, T.shape[1], 1);
+        for (U16 v: orbits_B) {
+            if (v==0) continue;
+            auto symmetries_locked_uv = symmetry_generators(T, u, v);
+            auto orbits_C = get_orbit_reps(symmetries_locked_uv, T.shape[2], 2);
+            for (U16 w: orbits_C) {
+                if (w==0) continue;
+                rank1_orbits.push_back(Term{u,v,w});
+            }
+        }
+    }
+    return rank1_orbits;
+}
