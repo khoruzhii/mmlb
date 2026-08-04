@@ -12,7 +12,7 @@ class Tensor {
   public:
     Shape shape;
 
-    Tensor() : shape{} {}
+    Tensor() : data{}, shape{} {}
     explicit Tensor(const std::array<U64,64>& d, Shape s = {}) : data(d), shape(s) {}
 
     bool get_bit(size_t i, size_t j, size_t k) const {
@@ -42,6 +42,14 @@ class Tensor {
     }
 
     const std::array<U64,64>& raw() const { return data; }
+
+    bool operator==(const Tensor& other) const {
+        if (shape != other.shape) return false;
+        for (size_t i = 0; i < 64; i++) {
+            if (data[i] != other.data[i]) return false;
+        }
+        return true;
+    }
 
     inline Tensor transpose_BC() const {
       std::array<U64,64> out{};
