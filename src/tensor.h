@@ -42,6 +42,7 @@ class Tensor {
     }
 
     const std::array<U64,64>& raw() const { return data; }
+    std::array<U64,64>& mut_raw() { return data; }
 
     bool operator==(const Tensor& other) const {
         if (shape != other.shape) return false;
@@ -182,7 +183,7 @@ class Tensor {
   
   Tensor nf() const {
     Tensor t;
-    comp = (shape[0] > shape[1])<<2 | (shape[1] > shape[2])<<1 | (shape[0] > shape[2]);
+    int comp = (shape[0] > shape[1])<<2 | (shape[1] > shape[2])<<1 | (shape[0] > shape[2]);
     switch (comp) {
       case 0: t = *this; break;
       case 2: t = transpose_BC(); break;
