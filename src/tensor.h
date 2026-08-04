@@ -119,4 +119,78 @@ class Tensor {
       }
       return Tensor(out, {shape[0], shape[2], shape[1]});
     }
+
+
+  inline Tensor transpose_AB() const {
+    std::array<U64,64> out{};
+    __m256i r[16], t[16], u[16];
+
+    // ── Load: one YMM per row of the 16×16 word matrix ─────────
+    for (int i = 0; i < 16; i++)
+      r[i] = _mm256_loadu_si256(
+        reinterpret_cast<const __m256i*>(&data[4 * i]));
+
+    // ── Stage 1: 16-bit interleave ─────────────────────────────
+    // Pairs rows (0,1), (2,3), ..., (14,15).
+    // lo: merges elements at even positions within each 128-bit lane
+    // hi: merges elements at odd positions
+    for (int i = 0; i < 16; i += 2) {
+      t[i + 0] = _mm256_unpacklo_epi16(r[i], r[i + 1]);
+      t[i + 1] = _mm256_unpackhi_epi16(r[i], r[i + 1]);
+    }
+
+    // ── Stage 2: 32-bit interleave ─────────────────────────────
+    // Merges groups of 2 rows into groups of 4.
+    // Pairs (t[0],t[2]), (t[1],t[3]) within each block of 4.
+    for (int i = 0; i < 16; i += 4) {
+      u[i + 0] = _mm256_unpacklo_epi32(t[i + 0], t[i + 2]);
+      u[i + 1] = _mm256_unpackhi_epi32(t[i + 0], t[i + 2]);
+      u[i + 2] = _mm256_unpacklo_epi32(t[i + 1], t[i + 3]);
+      u[i + 3] = _mm256_unpackhi_epi32(t[i + 1], t[i + 3]);
+    }
+
+    // ── Stage 3: 64-bit interleave ─────────────────────────────
+    // Merges groups of 4 rows into groups of 8.
+    // After this, each lane holds one complete column for 8 rows.
+    for (int i = 0; i < 16; i += 8) {
+      t[i + 0] = _mm256_unpacklo_epi64(u[i + 0], u[i + 4]);
+      t[i + 1] = _mm256_unpackhi_epi64(u[i + 0], u[i + 4]);
+      t[i + 2] = _mm256_unpacklo_epi64(u[i + 1], u[i + 5]);
+      t[i + 3] = _mm256_unpackhi_epi64(u[i + 1], u[i + 5]);
+      t[i + 4] = _mm256_unpacklo_epi64(u[i + 2], u[i + 6]);
+      t[i + 5] = _mm256_unpackhi_epi64(u[i + 2], u[i + 6]);
+      t[i + 6] = _mm256_unpacklo_epi64(u[i + 3], u[i + 7]);
+      t[i + 7] = _mm256_unpackhi_epi64(u[i + 3], u[i + 7]);
+    }
+
+    // ── Stage 4: 128-bit cross-lane permute ────────────────────
+    // Merges the two 8-row halves into complete 16-element columns.
+    for (int i = 0; i < 8; i++) {
+      r[i]     = _mm256_permute2x128_si256(t[i], t[i + 8], 0x20);
+      r[i + 8] = _mm256_permute2x128_si256(t[i], t[i + 8], 0x31);
+    }
+
+    // ── Store ──────────────────────────────────────────────────
+    for (int i = 0; i < 16; i++)
+      _mm256_storeu_si256(
+        reinterpret_cast<__m256i*>(&out[4 * i]), r[i]);
+
+    return Tensor(out, {shape[1], shape[0], shape[2]});
+  }
+
+
+  
+  Tensor nf() const {
+    Tensor t;
+    comp = (shape[0] > shape[1])<<2 | (shape[1] > shape[2])<<1 | (shape[0] > shape[2]);
+    switch (comp) {
+      case 0: t = *this; break;
+      case 2: t = transpose_BC(); break;
+      case 3: t = transpose_BC().transpose_AB(); break;
+      case 4: t = transpose_AB(); break;
+      case 5: t = transpose_AB().transpose_BC(); break;
+      case 7: t = transpose_AB().transpose_BC().transpose_AB(); break;
+    }
+
+    return t;
 };
