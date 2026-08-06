@@ -52,6 +52,13 @@ class Tensor {
         return true;
     }
 
+    bool operator<(const Tensor& other) const {
+        if (shape[0] != other.shape[0]) return shape[0] < other.shape[0];
+        if (shape[1] != other.shape[1]) return shape[1] < other.shape[1];
+        if (shape[2] != other.shape[2]) return shape[2] < other.shape[2];
+        return data < other.data;
+    }
+
     inline Tensor transpose_BC() const {
       std::array<U64,64> out{};
       for (size_t i = 0; i < 16; i++) {
@@ -194,4 +201,5 @@ class Tensor {
     }
 
     return t;
+  }
 };

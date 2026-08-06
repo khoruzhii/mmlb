@@ -93,4 +93,9 @@ public:
         }
         return basis;
     }
+
+    std::size_t rank() {
+        rref();
+        return pivot_cols.size();
+    }
 };

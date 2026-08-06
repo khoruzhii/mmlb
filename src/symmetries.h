@@ -1,3 +1,6 @@
+#pragma once
+#include <vector>
+bool is_symmetry(Tensor& T, std::vector<U64>& vec);
 #include "matrix.h"
 #include "tensor.h"
 #include <vector>
@@ -13,14 +16,14 @@
 // This is a linear system of which we want the nullspace, so we find a basis for the right kernel of some matrix.
 // Next we check if the (X,Y,Z) found correspond to (U,V,W) that are actually symmetries.
 
-
-Matrix annihilator_matrix(Tensor& T, U16 lock_u, U16 lock_v) { // lock_u and lock_v will be zero for getting symmetries usually. These are for getting orbits of all rank one tensors
+Matrix annihilator_matrix(Tensor& T, U16 lock_u, U16 lock_v, U16 lock_w) { // lock_u, lock_v and lock_w will be zero for getting symmetries usually. These are for getting orbits of all rank one tensors
     size_t sa = T.shape[0];
     size_t sb = T.shape[1];
     size_t sc = T.shape[2];
     size_t extra_rows = 0;
     if (lock_u) extra_rows += sa;
     if (lock_v) extra_rows += sb;
+    if (lock_w) extra_rows += sc;
     Matrix M(sa*sb*sc + extra_rows, sa*sa+sb*sb+sc*sc);
     size_t row_idx = 0;
     for (size_t i = 0; i < sa; i++) {
@@ -61,15 +64,25 @@ Matrix annihilator_matrix(Tensor& T, U16 lock_u, U16 lock_v) { // lock_u and loc
             row_idx++;
         }
     }
+    if (lock_w) {
+        for (size_t k = 0; k < sc; k++) {
+            for (size_t Z = 0; Z < sc; Z++) {
+                if ((lock_w >> Z) & 1) {
+                    M.set(row_idx, sa*sa+sb*sb + k*sc + Z, true);
+                }
+            }
+            row_idx++;
+        }
+    }
 
     return M;
 }
 
-std::vector<std::vector<U64>> get_candidate_symmetries(Tensor& T, U16 lock_u, U16 lock_v) {
+std::vector<std::vector<U64>> get_candidate_symmetries(Tensor& T, U16 lock_u, U16 lock_v, U16 lock_w) {
     size_t sa = T.shape[0];
     size_t sb = T.shape[1];
     size_t sc = T.shape[2];
-    Matrix M = annihilator_matrix(T, lock_u, lock_v);
+    Matrix M = annihilator_matrix(T, lock_u, lock_v, lock_w);
     auto nullspace = M.right_nullspace_basis(); // this is a basis for (X,Y,Z) such that (X+Y+Z)T = 0.
     std::vector<std::vector<U64>> symmetries;
     for (auto& short_vec : nullspace) {
@@ -111,8 +124,7 @@ std::vector<std::vector<U64>> get_candidate_symmetries(Tensor& T, U16 lock_u, U1
     return symmetries;
 }
 
-bool is_symmetry(Tensor& T, std::vector<U64>& vec) {
-    // confirms if a candidate symmetry really works
+Tensor apply_symmetry_to_tensor(const Tensor& T, const std::vector<U64>& vec) {
     std::vector<U64> U(4);
     std::vector<U64> V(4);
     std::vector<U64> W(4);
@@ -161,12 +173,16 @@ bool is_symmetry(Tensor& T, std::vector<U64>& vec) {
             }
         }
     }
-    
-    return T == T3; // We need to have a == operator on tensors!
+    return T3;
 }
 
-std::vector<std::vector<U64>> symmetry_generators(Tensor& T, U16 lock_u = 0, U16 lock_v = 0) {
-    std::vector<std::vector<U64>> candidates = get_candidate_symmetries(T, lock_u, lock_v);
+bool is_symmetry(Tensor& T, std::vector<U64>& vec) {
+    Tensor T3 = apply_symmetry_to_tensor(T, vec);
+    return T == T3;
+}
+
+std::vector<std::vector<U64>> symmetry_generators(Tensor& T, U16 lock_u = 0, U16 lock_v = 0, U16 lock_w = 0) {
+    std::vector<std::vector<U64>> candidates = get_candidate_symmetries(T, lock_u, lock_v, lock_w);
     std::vector<std::vector<U64>> symmetries;
     
     for (auto& candidate : candidates) {
