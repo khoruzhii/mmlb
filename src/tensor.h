@@ -23,6 +23,10 @@ class Tensor {
       return (data[4*i + j/4] >> (16*(j%4))) & U64(0xFFFF);
     }
 
+    std::array<U64,64> get_data() const {
+      return data;
+    }
+
 #if __cplusplus >= 202302L
     bool operator[](size_t i, size_t j, size_t k) const {
       return get_bit(i, j, k);

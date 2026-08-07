@@ -18,6 +18,20 @@ public:
         data_.resize(rows_ * words_per_row);
     }
 
+    Matrix(const std::array<U64, 64>& data, std::size_t rows, std::size_t cols, std::size_t stride = 0) : rows_(rows), cols_(cols) {
+        words_per_row = (cols + 63) / 64;
+        if (stride == 0) {
+            data_.assign(data.begin(), data.begin() + rows_ * words_per_row);
+        } else {
+            data_.resize(rows_ * words_per_row);
+            for (std::size_t i = 0; i < rows_; i++) {
+                for (std::size_t w = 0; w < words_per_row; w++) {
+                    data_[i * words_per_row + w] = data[i * stride + w];
+                }
+            }
+        }
+    }
+
     void set(std::size_t row, std::size_t col, bool val) {
         std::size_t word_index = col / 64;
         std::size_t bit_index = col % 64;

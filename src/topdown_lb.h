@@ -95,7 +95,7 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
     }
 
     // (2) Check if flatten_rank is at least target_lb. If so, return true
-    if (flatten_rank(T) >= target_lb) {
+    if (flattening_bound(T, target_lb)) {
         std::cout << indent << "├─ Step 2: flatten_rank >= target_lb, returning true\n" << std::flush;
         return true;
     }

@@ -27,9 +27,9 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    size_t sa = n * m;
-    size_t sb = m * p;
-    size_t sc = n * p;
+    U8 sa = n * m;
+    U8 sb = m * p;
+    U8 sc = n * p;
 
     if (sa > 16 || sb > 16 || sc > 16) {
         std::cerr << "Tensor dimensions " << sa << "x" << sb << "x" << sc 
