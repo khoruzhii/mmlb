@@ -111,59 +111,8 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
         return true;
     }
 
-    std::cout << indent << "├─ Step 3: computing substitutions (shape: " << (int)T.shape[0] << "x" << (int)T.shape[1] << "x" << (int)T.shape[2] << ", target_lb: " << target_lb << ", conj_rank: " << conj_rank << ")\n" << std::flush;
-    auto symmetries_init = symmetry_generators(T);
-    std::cout << indent << "├─ Step 3: symmetries computed\n" << std::flush;
-
-    // (3) Loop through the spaces and then the orbits for that space
-    int min_sub_rank[3] = {100,100,100};
-    std::vector<std::pair<Tensor, int>> subs[3];
-    for (int axis = 0; axis < 3; axis++) {
-        std::vector<U16> orbits = get_orbit_reps(symmetries_init, T.shape[axis], axis);
-        for (U16 u : orbits) {
-            if (u == 0) continue;
-            Tensor sub = apply_substitution(T, u, axis);
-            if (std::max({sub.shape[0],sub.shape[1],sub.shape[2]}) <= 3) {
-                std::cout << indent << "├─ Step 3: rank table lookup for orbit " << format_orbit(u, axis) << "=0 (axis " << axis << ")\n" << std::flush;
-                if (rank_table_lookup(sub,rank_table) >= target_lb) {
-                    std::cout << indent << "├─ Step 3: [LOOKUP] Rank(sub) >= " << target_lb << ", returning true\n" << std::flush;
-                    return true;
-                }
-                else {
-                    std::cout << indent << "├─ Step 3: [LOOKUP] Rank(sub) < " << target_lb << "\n" << std::flush;
-                    continue;
-                }
-            }
-
-            sub = sub.nf();
-            if (lb_cache.count(sub)) {
-                if (lb_cache[sub].max_success >= target_lb) {
-                    std::cout << indent << "├─ Step 3: [CACHED] Rank(sub) >= " << target_lb << ", returning true\n" << std::flush;
-                    return true;
-                }
-                if (lb_cache[sub].min_fail <= target_lb) {
-                    std::cout << indent << "├─ [CACHED] Rank(sub) < " << target_lb << "\n" << std::flush;
-                    continue;
-                }
-            }
-
-            std::cout << indent << "├─ Step 3: calling ub(sub) for orbit " << format_orbit(u, axis) << "=0 (axis " << axis << ")\n" << std::flush;
-                        int sub_conj_rank = ub(sub);
-            std::cout << indent << "├─ Step 3: ub(sub) = " << sub_conj_rank << "\n" << std::flush;
-            if (sub_conj_rank >= target_lb) {
-                std::cout << indent << "├─ Step 3: Calling recursive topdown_lb\n" << std::flush;
-                if (topdown_lb(sub, target_lb, sub_conj_rank, depth + 1)) {
-                    std::cout << indent << "├─ Step 3: Recursive call returned true, returning true\n" << std::flush;
-                    return true;
-                }
-            }
-            min_sub_rank[axis] = std::min(min_sub_rank[axis], sub_conj_rank);
-            subs[axis].push_back({sub, sub_conj_rank});
-        }
-    }
-
-    // (4) Simple Forced Products
-    std::cout << indent << "├─ Step 4: Checking simple forced products\n" << std::flush;
+    // (3) Simple Forced Products
+    std::cout << indent << "├─ Step 3: Checking simple forced products\n" << std::flush;
     auto fps = find_forced_products(T);
     
     for (int fp_ax = 0; fp_ax < 3; fp_ax++) {
@@ -183,14 +132,65 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
                 Tensor sub = apply_substitution(T, f, factor_ax);
                 int sub_rank = ub(sub);
                 if (sub_rank >= target_lb - m) {
-                    std::cout << indent << "├─ Step 4: Branching on factor " << f << " on axis " << factor_ax 
+                    std::cout << indent << "├─ Step 3: Branching on factor " << f << " on axis " << factor_ax 
                               << " (drops rank by " << m << ", target_lb=" << target_lb - m << ")\n" << std::flush;
                     if (topdown_lb(sub, target_lb - m, sub_rank, depth + 1)) {
-                        std::cout << indent << "├─ Step 4: Recursive call returned true\n" << std::flush;
+                        std::cout << indent << "├─ Step 3: Recursive call returned true\n" << std::flush;
                         return true;
                     }
                 }
             }
+        }
+    }
+
+    std::cout << indent << "├─ Step 4: computing substitutions (shape: " << (int)T.shape[0] << "x" << (int)T.shape[1] << "x" << (int)T.shape[2] << ", target_lb: " << target_lb << ", conj_rank: " << conj_rank << ")\n" << std::flush;
+    auto symmetries_init = symmetry_generators(T);
+    std::cout << indent << "├─ Step 4: symmetries computed\n" << std::flush;
+
+    // (3) Loop through the spaces and then the orbits for that space
+    int min_sub_rank[3] = {100,100,100};
+    std::vector<std::pair<Tensor, int>> subs[3];
+    for (int axis = 0; axis < 3; axis++) {
+        std::vector<U16> orbits = get_orbit_reps(symmetries_init, T.shape[axis], axis);
+        for (U16 u : orbits) {
+            if (u == 0) continue;
+            Tensor sub = apply_substitution(T, u, axis);
+            if (std::max({sub.shape[0],sub.shape[1],sub.shape[2]}) <= 3) {
+                std::cout << indent << "├─ Step 4: rank table lookup for orbit " << format_orbit(u, axis) << "=0 (axis " << axis << ")\n" << std::flush;
+                if (rank_table_lookup(sub,rank_table) >= target_lb) {
+                    std::cout << indent << "├─ Step 4: [LOOKUP] Rank(sub) >= " << target_lb << ", returning true\n" << std::flush;
+                    return true;
+                }
+                else {
+                    std::cout << indent << "├─ Step 4: [LOOKUP] Rank(sub) < " << target_lb << "\n" << std::flush;
+                    continue;
+                }
+            }
+
+            sub = sub.nf();
+            if (lb_cache.count(sub)) {
+                if (lb_cache[sub].max_success >= target_lb) {
+                    std::cout << indent << "├─ Step 4: [CACHED] Rank(sub) >= " << target_lb << ", returning true\n" << std::flush;
+                    return true;
+                }
+                if (lb_cache[sub].min_fail <= target_lb) {
+                    std::cout << indent << "├─ Step 4: [CACHED] Rank(sub) < " << target_lb << "\n" << std::flush;
+                    continue;
+                }
+            }
+
+            std::cout << indent << "├─ Step 4: calling ub(sub) for orbit " << format_orbit(u, axis) << "=0 (axis " << axis << ")\n" << std::flush;
+                        int sub_conj_rank = ub(sub);
+            std::cout << indent << "├─ Step 4: ub(sub) = " << sub_conj_rank << "\n" << std::flush;
+            if (sub_conj_rank >= target_lb) {
+                std::cout << indent << "├─ Step 4: Calling recursive topdown_lb\n" << std::flush;
+                if (topdown_lb(sub, target_lb, sub_conj_rank, depth + 1)) {
+                    std::cout << indent << "├─ Step 4: Recursive call returned true, returning true\n" << std::flush;
+                    return true;
+                }
+            }
+            min_sub_rank[axis] = std::min(min_sub_rank[axis], sub_conj_rank);
+            subs[axis].push_back({sub, sub_conj_rank});
         }
     }
 
@@ -323,7 +323,7 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
     // (7) Generate all rank one tensors, construct T+t, and call topdown_lb
     std::vector<Term> rank1_orbits = get_rank1_orbits(T);
     std::cout << indent << "├─ Step 7: Generated " << rank1_orbits.size() << " rank1 orbits\n" << std::flush;
-    if (rank1_orbits.size() > 150) { // without this branching factor check, we can *always* use this to prove any valid lower bound. However, it will usually struggle to be fast...
+    if (rank1_orbits.size() > 50) { // without this branching factor check, we can *always* use this to prove any valid lower bound. However, it will usually struggle to be fast...
         std::cout << indent << "├─ Step 7: Too many rank1 orbits, giving up\n" << std::flush;
         return false;
     }
