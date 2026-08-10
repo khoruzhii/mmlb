@@ -49,6 +49,9 @@ inline int ub(const Tensor& T) {
     for (int step = 0; step < pathlength; step++) {
         int numflips = scheme.flips[0].size() + scheme.flips[1].size() + scheme.flips[2].size();
         if (flips_since_plus >= 5000 || numflips == 0) {
+            if (scheme.rank == 1) {
+                return 1;
+            }
             scheme.randomsplit(gen, coinflip, d3, 10);
             flips_since_plus = 0;
         }

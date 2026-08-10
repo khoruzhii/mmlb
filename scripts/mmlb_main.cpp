@@ -36,7 +36,8 @@ int main(int argc, char* argv[]) {
                   << " exceed maximum supported shape (16x16x16)." << std::endl;
         return 1;
     }
-
+    
+    load_table("third_party/rank_table_3x3x3_f2.raw", rank_table);
     clear_cache();
     Shape shape = {sa, sb, sc};
     Tensor T(std::array<U64, 64>{}, shape);

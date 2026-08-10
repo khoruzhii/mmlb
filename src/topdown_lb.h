@@ -6,6 +6,7 @@
 #include "symmetries.h"
 #include "substitution.h"
 #include "forced_product.h"
+#include "rank_table.h"
 #include <iostream>
 #include <map>
 #include <algorithm>
@@ -18,6 +19,8 @@ inline std::map<Tensor, CacheEntry> lb_cache;
 inline void clear_cache() {
     lb_cache.clear();
 }
+
+inline std::vector<U8> rank_table;
 
 inline std::string format_orbit(U16 u, int axis) {
     std::string axis_name = (axis == 0) ? "a" : (axis == 1) ? "b" : "c";
@@ -54,10 +57,18 @@ inline std::string tensor_to_string(const Tensor& T) {
 inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int depth);
 
 inline bool topdown_lb(Tensor T, int target_lb, int conj_rank, int depth = 0) {
-    T = T.nf();
     std::string indent = "";
     for(int i=0; i<depth; i++) indent += "│   ";
     
+    if (std::max({T.shape[0],T.shape[1],T.shape[2]}) <= 3) {
+        if (rank_table_lookup(T,rank_table) >= target_lb) {
+            std::cout << indent << "├─ [LOOKUP] Rank >= " << target_lb << " is TRUE\n" << std::flush;
+            return true;
+        }
+    }
+
+    T = T.nf();
+
     if (lb_cache.count(T)) {
         if (lb_cache[T].max_success >= target_lb) {
             std::cout << indent << "├─ [CACHED] Rank >= " << target_lb << " is TRUE\n" << std::flush;
@@ -112,6 +123,30 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
         for (U16 u : orbits) {
             if (u == 0) continue;
             Tensor sub = apply_substitution(T, u, axis);
+            if (std::max({sub.shape[0],sub.shape[1],sub.shape[2]}) <= 3) {
+                std::cout << indent << "├─ Step 3: rank table lookup for orbit " << format_orbit(u, axis) << "=0 (axis " << axis << ")\n" << std::flush;
+                if (rank_table_lookup(sub,rank_table) >= target_lb) {
+                    std::cout << indent << "├─ Step 3: [LOOKUP] Rank(sub) >= " << target_lb << ", returning true\n" << std::flush;
+                    return true;
+                }
+                else {
+                    std::cout << indent << "├─ Step 3: [LOOKUP] Rank(sub) < " << target_lb << "\n" << std::flush;
+                    continue;
+                }
+            }
+
+            sub = sub.nf();
+            if (lb_cache.count(sub)) {
+                if (lb_cache[sub].max_success >= target_lb) {
+                    std::cout << indent << "├─ Step 3: [CACHED] Rank(sub) >= " << target_lb << ", returning true\n" << std::flush;
+                    return true;
+                }
+                if (lb_cache[sub].min_fail <= target_lb) {
+                    std::cout << indent << "├─ [CACHED] Rank(sub) < " << target_lb << "\n" << std::flush;
+                    continue;
+                }
+            }
+
             std::cout << indent << "├─ Step 3: calling ub(sub) for orbit " << format_orbit(u, axis) << "=0 (axis " << axis << ")\n" << std::flush;
                         int sub_conj_rank = ub(sub);
             std::cout << indent << "├─ Step 3: ub(sub) = " << sub_conj_rank << "\n" << std::flush;
@@ -288,7 +323,7 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
     // (7) Generate all rank one tensors, construct T+t, and call topdown_lb
     std::vector<Term> rank1_orbits = get_rank1_orbits(T);
     std::cout << indent << "├─ Step 7: Generated " << rank1_orbits.size() << " rank1 orbits\n" << std::flush;
-    if (rank1_orbits.size() > 32) { // without this branching factor check, we can *always* use this to prove any valid lower bound. However, it will usually struggle to be fast...
+    if (rank1_orbits.size() > 150) { // without this branching factor check, we can *always* use this to prove any valid lower bound. However, it will usually struggle to be fast...
         std::cout << indent << "├─ Step 7: Too many rank1 orbits, giving up\n" << std::flush;
         return false;
     }
