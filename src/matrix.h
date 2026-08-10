@@ -57,6 +57,19 @@ public:
         }
     }
 
+    // set a word of bits starting at col_start in row
+    void set_word(std::size_t row, std::size_t col_start, U64 bits, unsigned count) {
+        if (count < 64) 
+            bits &= (U64(1) << count) - 1;
+        std::size_t word_index = col_start / 64;
+        std::size_t bit_offset = col_start % 64;
+        std::size_t base = row * words_per_row;
+        data_[base + word_index] ^= (bits << bit_offset);
+        if (bit_offset + count > 64) {
+            data_[base + word_index + 1] ^= (bits >> (64 - bit_offset));
+        }
+    }
+
     // add row2 to row1
     void add(std::size_t row1, std::size_t row2) {
         std::size_t word1_start = row1 * words_per_row;

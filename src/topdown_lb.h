@@ -323,7 +323,7 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
     // (7) Generate all rank one tensors, construct T+t, and call topdown_lb
     std::vector<Term> rank1_orbits = get_rank1_orbits(T);
     std::cout << indent << "├─ Step 7: Generated " << rank1_orbits.size() << " rank1 orbits\n" << std::flush;
-    if (rank1_orbits.size() > 50) { // without this branching factor check, we can *always* use this to prove any valid lower bound. However, it will usually struggle to be fast...
+    if (rank1_orbits.size() > 150 || (depth >= 2 && rank1_orbits.size() > 50)) { // without this branching factor check, we can *always* use this to prove any valid lower bound. However, it will usually struggle to be fast...
         std::cout << indent << "├─ Step 7: Too many rank1 orbits, giving up\n" << std::flush;
         return false;
     }
