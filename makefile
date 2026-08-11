@@ -11,7 +11,7 @@ endif
 include $(CONFIG_FILE)
 
 SRC = scripts/mmlb_main.cpp third_party/updated_code/tensor.cpp third_party/updated_code/pairSet.cpp third_party/updated_code/mm.cpp
-DEPS = third_party/updated_code/tensor.hpp third_party/updated_code/pairSet.hpp third_party/updated_code/mm.hpp src/tensor.h src/flatten.h src/forced_product.h src/ub.h src/rank_table.h src/topdown_lb.h
+DEPS = third_party/updated_code/tensor.hpp third_party/updated_code/pairSet.hpp third_party/updated_code/mm.hpp src/types.h src/tensor.h src/matrix.h src/flatten.h src/forced_product.h src/symmetries.h src/substitution.h src/ub.h src/rank_table.h src/topdown_lb.h
 OUT = mmlb
 
 all: $(OUT)
