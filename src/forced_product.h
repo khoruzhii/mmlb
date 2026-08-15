@@ -4,100 +4,64 @@
 #include "matrix.h"
 #include "types.h"
 #include <vector>
+#include <string>
+
+
+inline std::string format_orbit(U16 u, int axis);
 
 struct ForcedProduct {
     int axis;
     int index;
     Term term;
+
+    std::string to_string() const {
+        std::string axis_name = (axis == 0) ? "a" : (axis == 1) ? "b" : "c";
+        return "FP(axis=" + axis_name + ", index=" + std::to_string(index) + ", term=(" +
+               format_orbit(term[0], 0) + ", " +
+               format_orbit(term[1], 1) + ", " +
+               format_orbit(term[2], 2) + "))";
+    }
 };
 
 // Only in standard basis for now, potential for improvement in future...
 inline std::vector<ForcedProduct> find_forced_products(const Tensor& T) {
     std::vector<ForcedProduct> fps;
     
-    for (size_t i = 0; i < T.shape[0]; i++) {
-        Matrix M(T.shape[1], T.shape[2]);
-        for (size_t j = 0; j < T.shape[1]; j++) {
-            for (size_t k = 0; k < T.shape[2]; k++) {
-                if (T.get_bit(i, j, k)) M.set(j, k, true);
-            }
-        }
-        Matrix M_copy = M; // so we don't mutate it when calling rank()
-        if (M_copy.rank() == 1) { // then we have a forced product
-            U16 w = 0;
-            int first_nonzero_col = -1;
-            for (size_t k = 0; k < T.shape[2]; k++) {
-                if (M_copy.get(0, k)) {
-                    w |= (1 << k);
-                    if (first_nonzero_col == -1) first_nonzero_col = k;
-                }
-            }
+    Tensor T_transposed;
+
+    for(int axis = 0; axis < 3; axis++) {
+        if (axis == 0) T_transposed = T;
+        if (axis == 1) T_transposed = T.transpose_AB();
+        else if (axis == 2) T_transposed = T.transpose_BC().transpose_AB();
+
+
+        for (size_t i = 0; i < T_transposed.shape[0]; i++) {
             U16 v = 0;
-            for (size_t j = 0; j < T.shape[1]; j++) {
-                if (M.get(j, first_nonzero_col)) {
-                    v |= (1 << j);
-                }
-            }
-            Term t = { (U16)(1 << i), v, w };
-            fps.push_back({0, (int)i, t});
-        }
-    }
-    
-    for (size_t j = 0; j < T.shape[1]; j++) {
-        Matrix M(T.shape[0], T.shape[2]);
-        for (size_t i = 0; i < T.shape[0]; i++) {
-            for (size_t k = 0; k < T.shape[2]; k++) {
-                if (T.get_bit(i, j, k)) M.set(i, k, true);
-            }
-        }
-        Matrix M_copy = M;
-        if (M_copy.rank() == 1) {
             U16 w = 0;
-            int first_nonzero_col = -1;
-            for (size_t k = 0; k < T.shape[2]; k++) {
-                if (M_copy.get(0, k)) {
-                    w |= (1 << k);
-                    if (first_nonzero_col == -1) first_nonzero_col = k;
+            for (size_t j = 0; j < T_transposed.shape[1]; j++) {
+                U16 row = T_transposed.get_row(i, j);
+                if (row != 0) {
+                    if (v == 0) {
+                        v = row;
+                        w = (1 << j);
+                    } else {
+                        if (row != v) {
+                            v = 0;
+                            break;
+                        }
+                        w |= (1 << j);
+                    }
                 }
             }
-            U16 u = 0;
-            for (size_t i = 0; i < T.shape[0]; i++) {
-                if (M.get(i, first_nonzero_col)) {
-                    u |= (1 << i);
+            if (v != 0) {
+                switch (axis) {
+                    case 0: fps.push_back({0, (int)i, { (U16)(1 << i), w, v }}); break;
+                    case 1: fps.push_back({1, (int)i, { w, (U16)(1 << i), v }}); break;
+                    case 2: fps.push_back({2, (int)i, { w, v, (U16)(1 << i) }}); break;
                 }
             }
-            Term t = { u, (U16)(1 << j), w };
-            fps.push_back({1, (int)j, t});
         }
     }
-    
-    for (size_t k = 0; k < T.shape[2]; k++) {
-        Matrix M(T.shape[0], T.shape[1]);
-        for (size_t i = 0; i < T.shape[0]; i++) {
-            for (size_t j = 0; j < T.shape[1]; j++) {
-                if (T.get_bit(i, j, k)) M.set(i, j, true);
-            }
-        }
-        Matrix M_copy = M;
-        if (M_copy.rank() == 1) {
-            U16 v = 0;
-            int first_nonzero_col = -1;
-            for (size_t j = 0; j < T.shape[1]; j++) {
-                if (M_copy.get(0, j)) {
-                    v |= (1 << j);
-                    if (first_nonzero_col == -1) first_nonzero_col = j;
-                }
-            }
-            U16 u = 0;
-            for (size_t i = 0; i < T.shape[0]; i++) {
-                if (M.get(i, first_nonzero_col)) {
-                    u |= (1 << i);
-                }
-            }
-            Term t = { u, v, (U16)(1 << k) };
-            fps.push_back({2, (int)k, t});
-        }
-    }
-    
+
     return fps;
 }

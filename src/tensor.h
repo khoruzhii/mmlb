@@ -186,7 +186,36 @@ class Tensor {
     return Tensor(out, {shape[1], shape[0], shape[2]});
   }
 
+ 
+    void reduce_axis0_inplace() {
+        size_t end = shape[0]; // rows [end, shape[0)) are known all-zero, parked at bottom
 
+        for (size_t i = 0; i < end; i++) {
+            // find pivot word/bit in row i, pulling up nonzero rows from the bottom
+            // if row i turns out zero
+            size_t pivot_idx;
+            for (;;) {
+                pivot_idx = 0;
+                while (pivot_idx < 4 && !data[4*i + pivot_idx]) pivot_idx++;
+                if (pivot_idx < 4) break; // found nonzero row at i
+
+                // row i is all zero: swap in row end-1 and shrink the boundary
+                end--;
+                if (i == end) return; // no nonzero rows left
+                for (size_t k = 0; k < 4; k++)
+                    std::swap(data[4*i + k], data[4*end + k]);
+            }
+
+            U64 pivot_mask = data[4*i + pivot_idx] & (-data[4*i + pivot_idx]);
+
+            for (size_t j = i + 1; j < end; j++) {
+                if (data[4*j + pivot_idx] & pivot_mask) {
+                    for (size_t k = 0; k < 4; k++)
+                        data[4*j + k] ^= data[4*i + k];
+                }
+            }
+        }
+    }
   
   Tensor nf() const {
     Tensor t;

@@ -114,6 +114,10 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
     // (3) Simple Forced Products
     std::cout << indent << "├─ Step 3: Checking simple forced products\n" << std::flush;
     auto fps = find_forced_products(T);
+
+    for (auto& fp : fps) {
+        std::cout << indent << "├─ Step 3: Found forced product: " << fp.to_string() << "\n" << std::flush;
+    }
     
     for (int fp_ax = 0; fp_ax < 3; fp_ax++) {
         std::vector<ForcedProduct> axis_fps;
