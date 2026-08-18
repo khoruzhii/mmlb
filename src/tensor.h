@@ -201,7 +201,10 @@ class Tensor {
 
                 // row i is all zero: swap in row end-1 and shrink the boundary
                 end--;
-                if (i == end) return; // no nonzero rows left
+                if (i == end) {
+                    shape[0] = end;
+                    return; // no nonzero rows left
+                }
                 for (size_t k = 0; k < 4; k++)
                     std::swap(data[4*i + k], data[4*end + k]);
             }
@@ -215,18 +218,24 @@ class Tensor {
                 }
             }
         }
+        shape[0] = end;
     }
   
   Tensor nf() const {
-    Tensor t;
-    int comp = (shape[0] > shape[1])<<2 | (shape[1] > shape[2])<<1 | (shape[0] > shape[2]);
+    Tensor t = *this;
+    t.reduce_axis0_inplace();
+    t = t.transpose_AB();
+    t.reduce_axis0_inplace();
+    t = t.transpose_BC().transpose_AB();
+    t.reduce_axis0_inplace();
+    int comp = (t.shape[0] > t.shape[1])<<2 | (t.shape[1] > t.shape[2])<<1 | (t.shape[0] > t.shape[2]);
     switch (comp) {
-      case 0: t = *this; break;
-      case 2: t = transpose_BC(); break;
-      case 3: t = transpose_BC().transpose_AB(); break;
-      case 4: t = transpose_AB(); break;
-      case 5: t = transpose_AB().transpose_BC(); break;
-      case 7: t = transpose_AB().transpose_BC().transpose_AB(); break;
+      case 0: break;
+      case 2: t = t.transpose_BC(); break;
+      case 3: t = t.transpose_BC().transpose_AB(); break;
+      case 4: t = t.transpose_AB(); break;
+      case 5: t = t.transpose_AB().transpose_BC(); break;
+      case 7: t = t.transpose_AB().transpose_BC().transpose_AB(); break;
     }
 
     return t;

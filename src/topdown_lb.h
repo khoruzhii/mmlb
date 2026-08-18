@@ -114,10 +114,6 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
     // (3) Simple Forced Products
     std::cout << indent << "├─ Step 3: Checking simple forced products\n" << std::flush;
     auto fps = find_forced_products(T);
-
-    for (auto& fp : fps) {
-        std::cout << indent << "├─ Step 3: Found forced product: " << fp.to_string() << "\n" << std::flush;
-    }
     
     for (int fp_ax = 0; fp_ax < 3; fp_ax++) {
         std::vector<ForcedProduct> axis_fps;
@@ -238,6 +234,11 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
         
         int D_prime = T_sub.shape[ax];
         int num_combinations = 1 << (N * D_prime);
+
+        if (num_combinations > 10000) {
+            std::cout << indent << "├─ Step 6: Too many combinations (" << num_combinations << "), skipping this axis\n" << std::flush;
+            continue;
+        }
         
         std::cout << indent << "├─ Step 6: Axis " << ax << " has " << N << " FPs. D'=" << D_prime 
                   << ". Branching " << num_combinations << " combinations. target_lb=" << target_lb - N << "\n" << std::flush;
