@@ -241,3 +241,20 @@ class Tensor {
     return t;
   }
 };
+
+namespace std {
+template <>
+struct hash<Tensor> {
+    size_t operator()(const Tensor& t) const noexcept {
+        size_t h = 0x9e3779b97f4a7c15ULL;
+        h ^= (size_t)t.shape[0] + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= (size_t)t.shape[1] + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= (size_t)t.shape[2] + 0x9e3779b9 + (h << 6) + (h >> 2);
+        const auto& raw = t.raw();
+        for (size_t i = 0; i < 4 * t.shape[0]; i++) {
+            h ^= raw[i] + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+        }
+        return h;
+    }
+};
+}

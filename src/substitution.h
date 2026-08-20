@@ -1,8 +1,10 @@
+#pragma once
+
 #include "tensor.h"
 #include "types.h"
 #include <bit>
 
-Tensor apply_substitution(const Tensor& T_orig, U16 u, int axis) {
+inline Tensor apply_substitution(const Tensor& T_orig, U16 u, int axis) {
     Tensor T = T_orig;
     int idx = std::countr_zero(u);
     U16 rest = u ^ (1 << idx);

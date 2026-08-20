@@ -3,11 +3,10 @@
 #include "subspaces.h"
 #include <vector>
 #include <map>
+#include <unordered_set>
 #include <numeric>
+#include <algorithm>
 #include "matrix.h"
-
-// The idea here is outlined in docs/HK-ILP-lemma.md
-// We use the subspace generation from subspaces.h which is infeasible
 
 inline U64 lcm(U64 a, U64 b) {
     return (a / std::gcd(a, b)) * b;
@@ -15,10 +14,11 @@ inline U64 lcm(U64 a, U64 b) {
 
 struct ILP {
     int r;
-    std::vector<int> orbit_sizes; // |O_i|
+    int num_vars;
+    int num_constraints;
     std::vector<int> max_multiplicities; // k_i * |O_i|
-    std::vector<std::vector<int>> v; // v_{ij}
-    std::vector<int> l; // l_j
+    std::vector<U64> weights;            // flattened C[j * num_vars + i] = v[j][i] * (L / |O_i|)
+    std::vector<U64> rhs;                // l[j] * L
 };
 
 inline std::vector<std::vector<int>> get_v(const std::vector<std::vector<U16>>& vector_orbits, const std::vector<Subspace>& subspace_reps) {
@@ -27,12 +27,11 @@ inline std::vector<std::vector<int>> get_v(const std::vector<std::vector<U16>>& 
     std::vector<std::vector<int>> v(num_subspaces, std::vector<int>(num_orbits, 0));
     for (size_t j = 0; j < num_subspaces; j++) {
         std::vector<U16> subspace_elements = get_subspace_elements(subspace_reps[j]);
+        std::unordered_set<U16> sub_set(subspace_elements.begin(), subspace_elements.end());
         for (size_t i = 0; i < num_orbits; i++) {
             int count = 0;
             for (U16 element : vector_orbits[i]) {
-                for (U16 subspace_element : subspace_elements) {
-                    if (element == subspace_element) {count++; break;}
-                }
+                if (sub_set.count(element)) count++;
             }
             v[j][i] = count;
         }
@@ -40,58 +39,75 @@ inline std::vector<std::vector<int>> get_v(const std::vector<std::vector<U16>>& 
     return v;
 }
 
-inline ILP build_ilp(std::vector<std::vector<U16>>& vector_orbits, std::vector<Subspace>& subspace_orbits, int r, std::vector<int> k, std::vector<int> l) {
+inline ILP build_ilp(const std::vector<std::vector<U16>>& vector_orbits, const std::vector<Subspace>& subspace_orbits, int r, const std::vector<int>& k, const std::vector<int>& l) {
     ILP ilp;
     ilp.r = r;
-    ilp.orbit_sizes = std::vector<int>(vector_orbits.size());
-    for (size_t i = 0; i < vector_orbits.size(); i++) {
-        ilp.orbit_sizes[i] = vector_orbits[i].size();
+    ilp.num_vars = (int)vector_orbits.size();
+    ilp.num_constraints = (int)subspace_orbits.size();
+    ilp.max_multiplicities.resize(ilp.num_vars);
+    for (int i = 0; i < ilp.num_vars; i++) {
+        ilp.max_multiplicities[i] = k[i] * (int)vector_orbits[i].size();
     }
-    ilp.max_multiplicities = std::vector<int>(vector_orbits.size());
-    for (size_t i = 0; i < vector_orbits.size(); i++) {
-        ilp.max_multiplicities[i] = k[i] * vector_orbits[i].size();
+    U64 L = 1;
+    for (const auto& orb : vector_orbits) {
+        L = lcm(L, (U64)orb.size());
     }
-    ilp.v = get_v(vector_orbits, subspace_orbits);
-    ilp.l = l;
+    auto raw_v = get_v(vector_orbits, subspace_orbits);
+    ilp.weights.resize(ilp.num_constraints * ilp.num_vars);
+    ilp.rhs.resize(ilp.num_constraints);
+    for (int j = 0; j < ilp.num_constraints; j++) {
+        ilp.rhs[j] = (U64)l[j] * L;
+        for (int i = 0; i < ilp.num_vars; i++) {
+            ilp.weights[j * ilp.num_vars + i] = (U64)raw_v[j][i] * (L / (U64)vector_orbits[i].size());
+        }
+    }
     return ilp;
 }
 
-// There are smart ways to solve an ILP. I am not going to do them. I am going to check each possible input and check if any work.
-
-inline bool check_ilp(ILP& ilp, std::vector<int>& x) {
-    if (std::accumulate(x.begin(), x.end(), 0) != ilp.r) return false;
-    for (size_t i = 0; i < ilp.orbit_sizes.size(); i++) {
-        if (x[i] < 0 || x[i] > ilp.max_multiplicities[i]) return false;
-    }
-    U64 lcm_all_orbitsizes = 1; // is U64 big enough here...? Should I use lcm instead somehow?
-    for (int size : ilp.orbit_sizes) {
-        lcm_all_orbitsizes = lcm(lcm_all_orbitsizes, (U64)size);
-    }
-    for (size_t j = 0; j < ilp.v.size(); j++) {
-        U64 sum = 0;
-        for (size_t i = 0; i < ilp.v[j].size(); i++) {
-            sum += (U64)ilp.v[j][i] * (U64)x[i] * (lcm_all_orbitsizes / (U64)ilp.orbit_sizes[i]);
+inline bool solve_ilp_dfs(const ILP& ilp, int idx, int curr_sum, std::vector<U64>& curr_lhs, std::vector<int>& x) {
+    if (idx == ilp.num_vars - 1) {
+        int rem = ilp.r - curr_sum;
+        if (rem < 0 || rem > ilp.max_multiplicities[idx]) return false;
+        for (int j = 0; j < ilp.num_constraints; j++) {
+            if (curr_lhs[j] + (U64)rem * ilp.weights[j * ilp.num_vars + idx] > ilp.rhs[j]) {
+                return false;
+            }
         }
-        if (sum > (U64)ilp.l[j] * lcm_all_orbitsizes) return false;
+        x.push_back(rem);
+        return true;
     }
-    return true;
-}
 
-inline bool feasibility_rec(ILP& ilp, std::vector<int>& x) {
-    if (x.size() == ilp.orbit_sizes.size()) {
-        return check_ilp(ilp, x);
-    }
-    if (x.size() == ilp.orbit_sizes.size() - 1) {
-        x.push_back(ilp.r - std::accumulate(x.begin(), x.end(), 0));
-        bool out = check_ilp(ilp, x);
+    int max_val = std::min(ilp.max_multiplicities[idx], ilp.r - curr_sum);
+    for (int val = 0; val <= max_val; val++) {
+        bool feasible = true;
+        for (int j = 0; j < ilp.num_constraints; j++) {
+            if (curr_lhs[j] + (U64)val * ilp.weights[j * ilp.num_vars + idx] > ilp.rhs[j]) {
+                feasible = false;
+                break;
+            }
+        }
+        if (!feasible) continue;
+
+        for (int j = 0; j < ilp.num_constraints; j++) {
+            curr_lhs[j] += (U64)val * ilp.weights[j * ilp.num_vars + idx];
+        }
+        x.push_back(val);
+
+        if (solve_ilp_dfs(ilp, idx + 1, curr_sum + val, curr_lhs, x)) {
+            return true;
+        }
+
         x.pop_back();
-        return out;
-    }
-    int current_sum = std::accumulate(x.begin(), x.end(), 0);
-    for (int i = 0; i <= ilp.max_multiplicities[x.size()] && ilp.r >= current_sum + i; i++) {
-        x.push_back(i);
-        if (feasibility_rec(ilp, x)) return true;
-        x.pop_back();
+        for (int j = 0; j < ilp.num_constraints; j++) {
+            curr_lhs[j] -= (U64)val * ilp.weights[j * ilp.num_vars + idx];
+        }
     }
     return false;
+}
+
+inline bool feasibility_rec(const ILP& ilp, std::vector<int>& x) {
+    x.clear();
+    if (ilp.num_vars == 0) return ilp.r == 0;
+    std::vector<U64> curr_lhs(ilp.num_constraints, 0);
+    return solve_ilp_dfs(ilp, 0, 0, curr_lhs, x);
 }

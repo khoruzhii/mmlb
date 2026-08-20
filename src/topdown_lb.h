@@ -13,12 +13,13 @@
 #include <iostream>
 #include <map>
 #include <algorithm>
+#include <unordered_map>
 
 struct CacheEntry {
     int max_success = -1;
     int min_fail = 1000;
 };
-inline std::map<Tensor, CacheEntry> lb_cache;
+inline std::unordered_map<Tensor, CacheEntry> lb_cache;
 inline void clear_cache() {
     lb_cache.clear();
 }
@@ -155,6 +156,7 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
     std::vector<std::pair<Tensor, int>> subs[3];
     for (int axis = 0; axis < 3; axis++) {
         std::vector<U16> orbits = get_orbit_reps(symmetries_init, T.shape[axis], axis);
+        std::cout << indent << "├─ Step 4: Axis " << axis << " (dim " << (int)T.shape[axis] << ") has " << orbits.size() << " orbit reps\n" << std::flush;
         for (U16 u : orbits) {
             if (u == 0) continue;
             Tensor sub = apply_substitution(T, u, axis);
@@ -190,8 +192,8 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
             std::cout << indent << "├─ Step 4: calling ub(sub) for orbit " << format_orbit(u, axis) << "=0 (axis " << axis << ")\n" << std::flush;
             int sub_conj_rank = ub(sub);
             std::cout << indent << "├─ Step 4: ub(sub) = " << sub_conj_rank << "\n" << std::flush;
-            if (sub_conj_rank >= (target_lb + conj_rank) / 2) { // while target_lb is probably good enough, this seems to work better
-                std::cout << indent << "├─ Step 4: Calling recursive topdown_lb\n" << std::flush;
+            if (sub_conj_rank >= target_lb && depth == 0) { // maybe depth == 0 is silly, but otherwise it seems to frequently gett stuck here down bad paths...
+                std::cout << indent << "├─ Step 4: Calling recursive topdown_lb (depth=" << depth + 1 << ")\n" << std::flush;
                 if (topdown_lb(sub, target_lb, sub_conj_rank, depth + 1)) {
                     std::cout << indent << "├─ Step 4: Recursive call returned true, returning true\n" << std::flush;
                     return true;
@@ -203,27 +205,154 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
     }
 
     // (5) If minimum conj_rank across all substitutions for a space is at least target_lb - 1
-    std::cout << indent << "├─ Step 5: checking min_sub_rank\n" << std::flush;
+    std::cout << indent << "├─ Step 5: checking min_sub_rank = [" << min_sub_rank[0] << ", " 
+              << min_sub_rank[1] << ", " << min_sub_rank[2] << "] (needed >= " << target_lb - 1 << ")\n" << std::flush;
+    std::vector<int> qualifying_axes;
     for (int axis = 0; axis < 3; axis++) {
-        if (min_sub_rank[axis] >= target_lb - 1 && !subs[axis].empty()) {
-            std::cout << indent << "├─ Step 5: Branching on axis " << axis << " with " << subs[axis].size() << " subs\n" << std::flush;
-            bool all_true = true;
-            for (auto& info : subs[axis]) {
-                if (!topdown_lb(info.first, target_lb - 1, info.second, depth + 1)) {
-                    std::cout << indent << "├─ Step 5: Recursive call returned false, breaking\n" << std::flush;
-                    all_true = false;
-                    break;
-                }
+        if (min_sub_rank[axis] >= target_lb - 1 && !subs[axis].empty() && subs[axis].size() <= 15) {
+            qualifying_axes.push_back(axis);
+        }
+    }
+    std::sort(qualifying_axes.begin(), qualifying_axes.end(), [&](int a, int b) {
+        return subs[a].size() < subs[b].size();
+    });
+    for (int axis : qualifying_axes) {
+        std::cout << indent << "├─ Step 5: Branching on axis " << axis << " with " << subs[axis].size() << " subs (target_lb=" << target_lb - 1 << ")\n" << std::flush;
+        bool all_true = true;
+        for (size_t i = 0; i < subs[axis].size(); i++) {
+            std::cout << indent << "├─ Step 5: Testing sub " << (i+1) << "/" << subs[axis].size() << " on axis " << axis << "...\n" << std::flush;
+            if (!topdown_lb(subs[axis][i].first, target_lb - 1, subs[axis][i].second, depth + 1)) {
+                std::cout << indent << "├─ Step 5: Sub " << (i+1) << "/" << subs[axis].size() << " returned false, breaking\n" << std::flush;
+                all_true = false;
+                break;
             }
-            if (all_true) {
-                std::cout << indent << "├─ Step 5: All recursive calls returned true, returning true\n" << std::flush;
-                return true;
+        }
+        if (all_true) {
+            std::cout << indent << "├─ Step 5: All recursive calls on axis " << axis << " returned true, returning true\n" << std::flush;
+            return true;
+        }
+    }
+
+    // (6) We use the generalisation of HK's approach
+    if (symmetries_init.size() >= 2) {
+        std::cout << indent << "├─ Step 6: Using HK's ILP approach (symmetries=" << symmetries_init.size() << ")\n" << std::flush;
+        int r = target_lb - 1;
+        std::vector<int> axes_order = {0, 1, 2};
+        std::sort(axes_order.begin(), axes_order.end(), [&](int a, int b) {
+            return T.shape[a] < T.shape[b];
+        });
+        for (int ax : axes_order) {
+            // Get the non-zero orbits
+            auto raw_orbits = get_orbits(symmetries_init, T.shape[ax], ax);
+            std::vector<std::vector<U16>> vector_orbits;
+            for (auto& orbit : raw_orbits) {
+                std::vector<U16> filtered;
+                for (U16 v : orbit) if (v != 0) filtered.push_back(v);
+                if (!filtered.empty()) vector_orbits.push_back(filtered);
+            }
+            if (vector_orbits.empty()) continue;
+            if (vector_orbits.size() > 12) {
+                std::cout << indent << "├─ Step 6: Axis " << ax << " has " << vector_orbits.size() << " vector orbits (too fragmented, skipping)\n" << std::flush;
+                continue;
+            }
+            
+            std::cout << indent << "├─ Step 6: Axis " << ax << " has " << vector_orbits.size() << " vector orbits\n" << std::flush;
+            // Compute the k_i
+            std::vector<int> k(vector_orbits.size());
+            std::vector<Tensor> subbed_tensors(vector_orbits.size());
+            std::vector<int> subbed_tensors_ubs(vector_orbits.size());
+            for (size_t i = 0; i < vector_orbits.size(); i++) {
+                subbed_tensors[i] = apply_substitution(T,vector_orbits[i][0],ax);
+                subbed_tensors_ubs[i] = ub(subbed_tensors[i]);
+                k[i] = std::max(r-subbed_tensors_ubs[i],0);
+            }
+            for (int dim = 2; dim < T.shape[ax]; dim++) {
+                std::vector<Subspace> subspace_reps = get_subspace_orbit_reps(symmetries_init, T.shape[ax], ax, dim, 80);
+                if (subspace_reps.empty() || subspace_reps.size() > 80) {
+                    std::cout << indent << "├─ Step 6: Dim " << dim << " on axis " << ax << " has " << subspace_reps.size() << " reps (skipping)\n" << std::flush;
+                    continue;
+                }
+                std::cout << indent << "├─ Step 6: Checking dim " << dim << " on axis " << ax << " (" << subspace_reps.size() << " subspace reps)...\n" << std::flush;
+                // Compute the substituted tensors and the l_j
+                std::vector<int> l(subspace_reps.size());
+                std::vector<Tensor> subbed_subspace_tensors(subspace_reps.size());
+                std::vector<int> subbed_subspace_tensors_ubs(subspace_reps.size());
+                for (size_t j = 0; j < subspace_reps.size(); j++) {
+                    subbed_subspace_tensors[j] = apply_subspace_substitution(T,subspace_reps[j],ax);
+                    subbed_subspace_tensors_ubs[j] = ub(subbed_subspace_tensors[j]);
+                    l[j] = std::max(r - subbed_subspace_tensors_ubs[j], 0);
+                }
+                // Build the ILP
+                std::vector<int> curr_k = k;
+                ILP ilp = build_ilp(vector_orbits, subspace_reps, r, curr_k, l);
+                std::vector<int> x;
+                bool feasible = feasibility_rec(ilp, x);
+                if (!feasible) {
+                    std::cout << indent << "├─ Step 6: ILP INFEASIBLE using dimension " << dim << " subspaces on axis " << ax << "! Applying HK Lemma!\n" << std::flush;
+                    // Then we can apply the lemma! Before branching, we should make it as easy as possible by trying to maximise the curr_k and l_j
+                    for (size_t i = 0; i < curr_k.size(); i++) {
+                        while (curr_k[i] < r) {
+                            curr_k[i]++;
+                            ilp = build_ilp(vector_orbits, subspace_reps, r, curr_k, l);
+                            x.clear();
+                            if (feasibility_rec(ilp,x)) {
+                                curr_k[i]--;
+                                break;
+                            }
+                        }
+                    }
+                    for (size_t j = 0; j < l.size(); j++) {
+                        while (l[j] < r) {
+                            l[j]++;
+                            ilp = build_ilp(vector_orbits, subspace_reps, r, curr_k, l);
+                            x.clear();
+                            if (feasibility_rec(ilp,x)) {
+                                l[j]--;
+                                break;
+                            }
+                        }
+                    }
+                    ilp = build_ilp(vector_orbits, subspace_reps, r, curr_k, l);
+
+                    bool all_refuted = true;
+                    // First we branch on all the 1d substitutions
+                    std::cout << indent << "├─ Step 6: Branching on 1D substitutions...\n" << std::flush;
+                    for (size_t i = 0; i < vector_orbits.size(); i++) {
+                        int new_target = r - curr_k[i];
+                        std::cout << indent << "├─ Step 6: 1D sub " << (i+1) << "/" << vector_orbits.size() 
+                                  << " (target=" << new_target << ", ub=" << subbed_tensors_ubs[i] << ")\n" << std::flush;
+                        if (new_target > 0 && !topdown_lb(subbed_tensors[i], new_target, subbed_tensors_ubs[i], depth + 1)) {
+                            std::cout << indent << "├─ Step 6: Recursive call returned false, breaking\n" << std::flush;
+                            all_refuted = false;
+                            break;
+                        }
+                    }
+                    if (all_refuted) {
+                        std::cout << indent << "├─ Step 6: All 1D substitutions refuted, branching on " << dim <<"D substitutions...\n" << std::flush;
+                        for (size_t j = 0; j < subspace_reps.size(); j++) {
+                            int new_target = r - l[j];
+                            std::cout << indent << "├─ Step 6: " << dim << "D sub " << (j+1) << "/" << subspace_reps.size() 
+                                      << " (target=" << new_target << ", ub=" << subbed_subspace_tensors_ubs[j] << ")\n" << std::flush;
+                            if (new_target > 0 && !topdown_lb(subbed_subspace_tensors[j], new_target, subbed_subspace_tensors_ubs[j], depth + 1)) {
+                                std::cout << indent << "├─ Step 6: Recursive call returned false, breaking\n" << std::flush;
+                                all_refuted = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (all_refuted) {
+                        std::cout << indent << "├─ Step 6: All branches refuted, returning true\n" << std::flush;
+                        return true;
+                    }
+                } else {
+                    std::cout << indent << "├─ Step 6: Dim " << dim << " ILP feasible, continuing\n" << std::flush;
+                }
             }
         }
     }
 
-    // (6) Branching Forced Products
-    std::cout << indent << "├─ Step 6: Branching forced products\n" << std::flush;
+    // (7) Branching Forced Products
+    std::cout << indent << "├─ Step 7: Branching forced products\n" << std::flush;
     for (int ax = 0; ax < 3; ax++) {
         std::vector<ForcedProduct> axis_fps;
         for (auto& fp : fps) if (fp.axis == ax) axis_fps.push_back(fp);
@@ -243,16 +372,24 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
         int D_prime = T_sub.shape[ax];
         int num_combinations = 1 << (N * D_prime);
 
-        if (num_combinations > 10000) {
-            std::cout << indent << "├─ Step 6: Too many combinations (" << num_combinations << "), skipping this axis\n" << std::flush;
+        if (num_combinations > 4096) {
+            std::cout << indent << "├─ Step 7: Too many combinations (" << num_combinations << "), skipping this axis\n" << std::flush;
+            continue;
+        }
+
+        auto syms = symmetry_generators(T_sub);
+        if (num_combinations > 64 && (syms.size() <= 1 || (size_t)num_combinations > 50 * syms.size())) {
+            std::cout << indent << "├─ Step 7: Too many combinations (" << num_combinations 
+                      << ") for symmetry group size (" << syms.size() << "), skipping this axis\n" << std::flush;
             continue;
         }
         
-        std::cout << indent << "├─ Step 6: Axis " << ax << " has " << N << " FPs. D'=" << D_prime 
+        std::cout << indent << "├─ Step 7: Axis " << ax << " has " << N << " FPs. D'=" << D_prime 
                   << ". Branching " << num_combinations << " combinations. target_lb=" << target_lb - N << "\n" << std::flush;
         // Before we branch over all possibilities, we should use symmetries to prune the search space.
         // First we list out every branch        
         std::vector<Tensor> raw_branches;
+        raw_branches.reserve(num_combinations);
         for (int comb = 0; comb < num_combinations; comb++) {
             Tensor T_branch = T_sub;
             for (int i = 0; i < N; i++) {
@@ -283,10 +420,13 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
             }
             raw_branches.push_back(T_branch);
         }
-        // Now we group them by orbits
+        // Now we group them by orbits using branch_map
         std::vector<Tensor> unique_branches;
-        if (num_combinations > 1) {
-            auto syms = symmetry_generators(T_sub);
+        if (num_combinations > 1 && !syms.empty()) {
+            std::unordered_map<Tensor, int> branch_map;
+            for (int i = 0; i < num_combinations; i++) {
+                branch_map[raw_branches[i]] = i;
+            }
             
             std::vector<bool> visited(num_combinations, false);
             for (int i = 0; i < num_combinations; i++) {
@@ -300,11 +440,10 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
                     Tensor curr_T = raw_branches[curr_idx];
                     for (const auto& sym : syms) {
                         Tensor next_T = apply_symmetry_to_tensor(curr_T, sym);
-                        for (int j = 0; j < num_combinations; j++) {
-                            if (!visited[j] && raw_branches[j] == next_T) { // if we find a symmetry of T_sub that actually maps to another branch, then we group these
-                                visited[j] = true;
-                                orbit.push_back(j);
-                            }
+                        auto it = branch_map.find(next_T);
+                        if (it != branch_map.end() && !visited[it->second]) {
+                            visited[it->second] = true;
+                            orbit.push_back(it->second);
                         }
                     }
                 }
@@ -312,7 +451,12 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
         } else {
             unique_branches = raw_branches;
         }
-        std::cout << indent << "├─ Step 6: Reduced " << num_combinations << " branches to " << unique_branches.size() << " branches up to symmetry\n" << std::flush;
+        std::cout << indent << "├─ Step 7: Reduced " << num_combinations << " branches to " << unique_branches.size() << " branches up to symmetry\n" << std::flush;
+        
+        if (unique_branches.size() > 50) {
+            std::cout << indent << "├─ Step 7: Too many unique branches (" << unique_branches.size() << "), skipping this axis\n" << std::flush;
+            continue;
+        }
         
         bool all_true = true;
         for (size_t b = 0; b < unique_branches.size(); b++) {
@@ -326,112 +470,11 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
         }
         
         if (all_true) {
-            std::cout << indent << "├─ Step 6: All combinations for axis " << ax << " returned true!\n" << std::flush;
+            std::cout << indent << "├─ Step 7: All combinations for axis " << ax << " returned true!\n" << std::flush;
             return true;
         }
     }
-
-    std::cout << indent << "├─ Step 6: some forced product branch didn't pan out, continuing\n" << std::flush;
-
-    // NOTE: this works, but can be very slow. When used it can help speed things up massively though. Needs more attention.
-    // (7) We use the generalisation of HK's approach
-    if (symmetries_init.size() >= 2) {
-        std::cout << indent << "├─ Step 7: Using HK's ILP approach\n" << std::flush;
-        int r = target_lb - 1;
-        for (int ax = 0; ax < 3; ax++) {
-            // Get the non-zero orbits
-            auto raw_orbits = get_orbits(symmetries_init, T.shape[ax], ax);
-            std::vector<std::vector<U16>> vector_orbits;
-            for (auto& orbit : raw_orbits) {
-                std::vector<U16> filtered;
-                for (U16 v : orbit) if (v != 0) filtered.push_back(v);
-                if (!filtered.empty()) vector_orbits.push_back(filtered);
-            }
-            if (vector_orbits.empty()) continue;
-            if (vector_orbits.size() > 4) continue; // Skip if vector orbits are too fragmented
-            
-            // Compute the k_i
-            std::vector<int> k(vector_orbits.size());
-            std::vector<Tensor> subbed_tensors(vector_orbits.size());
-            std::vector<int> subbed_tensors_ubs(vector_orbits.size());
-            for (size_t i = 0; i < vector_orbits.size(); i++) {
-                subbed_tensors[i] = apply_substitution(T,vector_orbits[i][0],ax);
-                subbed_tensors_ubs[i] = ub(subbed_tensors[i]);
-                k[i] = std::max(r-subbed_tensors_ubs[i],0);
-            }
-            for (int dim = 2; dim < T.shape[ax]; dim++) {
-                std::vector<Subspace> subspace_reps = get_subspace_orbit_reps(T, T.shape[ax], ax, dim);
-                if (subspace_reps.empty() || subspace_reps.size() > 15) continue;
-                // Compute the substituted tensors and the l_j
-                std::vector<int> l(subspace_reps.size());
-                std::vector<Tensor> subbed_subspace_tensors(subspace_reps.size());
-                std::vector<int> subbed_subspace_tensors_ubs(subspace_reps.size());
-                for (size_t j = 0; j < subspace_reps.size(); j++) {
-                    subbed_subspace_tensors[j] = apply_subspace_substitution(T,subspace_reps[j],ax);
-                    subbed_subspace_tensors_ubs[j] = ub(subbed_subspace_tensors[j]);
-                    l[j] = std::max(r - subbed_subspace_tensors_ubs[j],0);
-                }
-                // Build the ILP
-                ILP ilp = build_ilp(vector_orbits, subspace_reps, r, k, l);
-                std::vector<int> x;
-                bool feasible = feasibility_rec(ilp, x);
-                if (!feasible) {
-                    std::cout << indent << "├─ Step 7: ILP infeasible using dimension " << dim << " subspaces! Applying HK Lemma!\n" << std::flush;
-                    // Then we can apply the lemma! Before branching, we should make it as easy as possible by trying to maximise the k_i and l_j
-                    for (size_t i = 0; i < k.size(); i++) {
-                        while (k[i] < r) {
-                            k[i]++;
-                            ilp = build_ilp(vector_orbits, subspace_reps, r, k, l);
-                            x.clear();
-                            if (feasibility_rec(ilp,x)) {
-                                k[i]--;
-                                break;
-                            }
-                        }
-                    }
-                    for (size_t j = 0; j < l.size(); j++) {
-                        while (l[j] < r) {
-                            l[j]++;
-                            ilp = build_ilp(vector_orbits, subspace_reps, r, k, l);
-                            x.clear();
-                            if (feasibility_rec(ilp,x)) {
-                                l[j]--;
-                                break;
-                            }
-                        }
-                    }
-                    ilp = build_ilp(vector_orbits, subspace_reps, r, k, l);
-
-                    bool all_refuted = true;
-                    // First we branch on all the 1d substitutions
-                    std::cout << indent << "├─ Step 7: Branching on 1D substitutions...\n" << std::flush;
-                    for (size_t i = 0; i < vector_orbits.size(); i++) {
-                        int new_target = r - k[i];
-                        if (new_target > 0 &&!topdown_lb(subbed_tensors[i], new_target, subbed_tensors_ubs[i], depth + 1)) {
-                            std::cout << indent << "├─ Step 7: Recursive call returned false, breaking\n" << std::flush;
-                            all_refuted = false;
-                            break;
-                        }
-                    }
-                    if (all_refuted) {
-                        std::cout << indent << "├─ Step 7: All 1D substitutions refuted, branching on " << dim <<"D substitutions...\n" << std::flush;
-                        for (size_t j = 0; j < subspace_reps.size(); j++) {
-                            int new_target = r - l[j];
-                            if (new_target > 0 &&!topdown_lb(subbed_subspace_tensors[j], new_target, subbed_subspace_tensors_ubs[j], depth + 1)) {
-                                std::cout << indent << "├─ Step 7: Recursive call returned false, breaking\n" << std::flush;
-                                all_refuted = false;
-                                break;
-                            }
-                        }
-                    }
-                    if (all_refuted) {
-                        std::cout << indent << "├─ Step 7: All branches refuted, returning true\n" << std::flush;
-                        return true;
-                    }
-                }
-            }
-        }
-    }
+    std::cout << indent << "├─ Step 7: some forced product branch didn't pan out, continuing\n" << std::flush;
 
     // (8) Generate all rank one tensors, construct T+t, and call topdown_lb
     int max_rank1_allowed = (depth >= 2) ? 50 : 150;

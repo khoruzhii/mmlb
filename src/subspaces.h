@@ -1,9 +1,12 @@
 #pragma once
 
 #include "symmetries.h"
+#include "substitution.h"
 #include <bit>
 #include <utility>
-#include <set>
+#include <vector>
+#include <queue>
+#include <unordered_set>
 #include <algorithm>
 
 // basic use of subspaces
@@ -61,74 +64,231 @@ inline U16 proj_quotient(U16 w, const Subspace& S) {
     return w;
 }
 
-// IDEA: generate all d-dimensional subspaces up to symmetry by first creating a list of candidates
-// then we check for symmetry between them all. We can do this recursively picking a new basis element
-// and have each one be chosen uniquely up to symmetry. This stops us from checking exponentially large
-// Grassmannians.
+// Fast stack-allocated matrix representation of a symmetry on axis
+struct MatrixSym {
+    U16 col[16];
+    U16 row[16];
+};
 
-inline void get_subspace_candidates_rec(Tensor& T, size_t dim, int axis, size_t target_d, const Subspace& current_subspace, std::vector<Subspace>& candidates) {
-    if (current_subspace.size() == target_d) {
-        candidates.push_back(current_subspace);
-        return;
+inline MatrixSym extract_sym_matrix(const std::vector<U64>& sym, size_t dim, int axis) {
+    MatrixSym M{};
+    for (size_t i = 0; i < dim; i++) {
+        M.row[i] = (sym[axis * 4 + i / 4] >> (16 * (i % 4))) & 0xFFFF;
     }
-    // First get the symmetries
-    std::vector<std::vector<U64>> syms_locked;
-    if (axis == 0) syms_locked = symmetry_generators(T, current_subspace, {}, {});
-    else if (axis == 1) syms_locked = symmetry_generators(T, {}, current_subspace, {});
-    else syms_locked = symmetry_generators(T, {}, {}, current_subspace);
-    // Now we search the space
-    std::vector<bool> visited(1<<dim, false);
-    for (U16 v = 1; v < (1 << dim); v++) {
-        bool in_space = true;
-        for (U16 b : current_subspace) {
-            if ((v >> std::countr_zero(b))&1) {in_space = false; break;}
+    for (size_t j = 0; j < dim; j++) {
+        U16 c = 0;
+        for (size_t i = 0; i < dim; i++) {
+            if ((M.row[i] >> j) & 1) c |= (1 << i);
         }
-        if (!in_space || visited[v]) continue;
-        visited[v] = true;
-        // now we need to check all the terms that might contain v, and then remove all choices equivalent to v
-        Subspace next_subspace = current_subspace;
-        next_subspace.push_back(v);
-        next_subspace = rref(next_subspace);
-        get_subspace_candidates_rec(T, dim, axis, target_d, next_subspace, candidates);
-        std::vector<U16> v_orbit = {v};
-        size_t head = 0;
-        while (head < v_orbit.size()) {
-            U16 current = v_orbit[head++];
-            for (const auto& sym : syms_locked) {
-                U16 transformed = apply_symmetry(sym, current, dim, axis);
-                U16 next = proj_quotient(transformed, current_subspace);
-                if (!visited[next]) {
-                    visited[next] = true;
-                    v_orbit.push_back(next);
-                }
+        M.col[j] = c;
+    }
+    return M;
+}
+
+inline U16 apply_mat(const MatrixSym& M, U16 v) {
+    U16 out = 0;
+    while (v) {
+        int j = std::countr_zero(v);
+        out ^= M.col[j];
+        v &= v - 1;
+    }
+    return out;
+}
+
+// Stack-allocated Subspace representation for up to 16 basis vectors (zero heap allocs)
+struct Subspace16 {
+    U16 v[16];
+    U8 size;
+
+    U64 key0() const {
+        return (U64)v[0] | ((U64)v[1] << 16) | ((U64)v[2] << 32) | ((U64)v[3] << 48);
+    }
+    U64 key1() const {
+        return (U64)v[4] | ((U64)v[5] << 16) | ((U64)v[6] << 32) | ((U64)v[7] << 48);
+    }
+    U64 key2() const {
+        return (U64)v[8] | ((U64)v[9] << 16) | ((U64)v[10] << 32) | ((U64)v[11] << 48);
+    }
+    U64 key3() const {
+        return (U64)v[12] | ((U64)v[13] << 16) | ((U64)v[14] << 32) | ((U64)v[15] << 48);
+    }
+    bool operator==(const Subspace16& o) const {
+        if (size != o.size) return false;
+        for (int i = 0; i < size; i++) if (v[i] != o.v[i]) return false;
+        return true;
+    }
+};
+
+inline Subspace16 stack_rref(Subspace16 s) {
+    Subspace16 res{};
+    for (int i = 0; i < s.size; i++) {
+        U16 vec = s.v[i];
+        if (vec == 0) return Subspace16{{}, 0};
+        for (int j = 0; j < res.size; j++) {
+            int p = std::countr_zero(res.v[j]);
+            if ((vec >> p) & 1) vec ^= res.v[j];
+        }
+        if (vec == 0) return Subspace16{{}, 0};
+        int p = std::countr_zero(vec);
+        for (int j = 0; j < res.size; j++) {
+            if ((res.v[j] >> p) & 1) res.v[j] ^= vec;
+        }
+        if (res.size < 16) {
+            res.v[res.size++] = vec;
+        }
+        for (int j = res.size - 1; j > 0; j--) {
+            if (std::countr_zero(res.v[j]) < std::countr_zero(res.v[j - 1])) {
+                std::swap(res.v[j], res.v[j - 1]);
             }
         }
     }
+    return res;
 }
 
-// uses the above to find all d dimensional subspaces up to orbit equivalence
-inline std::vector<Subspace> get_subspace_orbit_reps(Tensor& T, size_t dim, int axis, size_t d = 2) {
-    if (d==0) return {{}};
-    auto syms_all = symmetry_generators(T, {}, {}, {});
-    std::vector<Subspace> candidates;
-    get_subspace_candidates_rec(T, dim, axis, d, {}, candidates);
+struct SubKey256 {
+    U64 k0, k1, k2, k3;
+    bool operator==(const SubKey256& o) const {
+        return k0 == o.k0 && k1 == o.k1 && k2 == o.k2 && k3 == o.k3;
+    }
+};
+
+struct SubKey256Hash {
+    size_t operator()(const SubKey256& k) const {
+        size_t h = k.k0 ^ (k.k1 * 1315423911ULL);
+        h ^= (k.k2 * 2654435761ULL) ^ (k.k3 * 1000000007ULL);
+        return h;
+    }
+};
+
+inline SubKey256 make_key256(const Subspace16& s) {
+    return {s.key0(), s.key1(), s.key2(), s.key3()};
+}
+
+inline Subspace to_subspace(const Subspace16& s) {
+    Subspace out(s.size);
+    for (int i = 0; i < s.size; i++) out[i] = s.v[i];
+    return out;
+}
+
+inline Subspace16 from_subspace(const Subspace& s) {
+    Subspace16 out{};
+    out.size = (U8)std::min<size_t>(s.size(), 16);
+    for (size_t i = 0; i < out.size; i++) out.v[i] = s[i];
+    return out;
+}
+
+// Gaussian binomial coefficient [n, k]_2
+inline double gaussian_binomial_2(int n, int k) {
+    if (k < 0 || k > n) return 0.0;
+    if (k == 0 || k == n) return 1.0;
+    if (k > n - k) k = n - k;
+    double res = 1.0;
+    for (int i = 0; i < k; i++) {
+        res *= (std::pow(2.0, n - i) - 1.0) / (std::pow(2.0, k - i) - 1.0);
+    }
+    return res;
+}
+
+// Fast inductive generation of d-dimensional subspace orbit representatives under group G
+inline std::vector<Subspace> get_subspace_orbit_reps(
+    const std::vector<std::vector<U64>>& syms,
+    size_t dim, int axis, size_t target_d, size_t max_reps = 30)
+{
+    if (target_d == 0) return {{}};
+
+    // Early mathematical orbit count lower bound: Total subspaces / |G|
+    double total_subspaces = gaussian_binomial_2((int)dim, (int)target_d);
+    double group_size = syms.empty() ? 1.0 : (double)syms.size();
+    if (total_subspaces / group_size > (double)max_reps) {
+        return std::vector<Subspace>(max_reps + 1);
+    }
+    if (target_d == 1) {
+        auto raw_orbits = get_orbits(syms, dim, axis);
+        std::vector<Subspace> reps;
+        for (auto& orb : raw_orbits) {
+            for (U16 v : orb) {
+                if (v != 0) {
+                    reps.push_back({v});
+                    break;
+                }
+            }
+            if (reps.size() > max_reps) break;
+        }
+        return reps;
+    }
+
+    std::vector<MatrixSym> mat_syms;
+    mat_syms.reserve(syms.size());
+    for (const auto& sym : syms) {
+        mat_syms.push_back(extract_sym_matrix(sym, dim, axis));
+    }
+
+    // Get parent representatives of dimension (target_d - 1)
+    std::vector<Subspace> prev_reps = get_subspace_orbit_reps(syms, dim, axis, target_d - 1, max_reps);
+    if (prev_reps.size() > max_reps) {
+        return std::vector<Subspace>(max_reps + 1);
+    }
+
+    std::unordered_set<SubKey256, SubKey256Hash> visited;
     std::vector<Subspace> reps;
-    std::set<Subspace> visited;
-    for (const auto& candidate : candidates) {
-        if (visited.count(candidate)) continue;
-        reps.push_back(candidate);
-        visited.insert(candidate);
-        std::vector<Subspace> orbit = {candidate};
-        size_t head = 0;
-        while (head < orbit.size()) {
-            const Subspace current_rep = orbit[head++];
-            for (const auto& sym : syms_all) {
-                Subspace transformed_rep = apply_symmetry(sym, current_rep, dim, axis);
-                Subspace next_rep = rref(transformed_rep);
-                if (next_rep.empty()) continue;
-                if (!visited.count(next_rep)) {
-                    visited.insert(next_rep);
-                    orbit.push_back(next_rep);
+
+    for (const auto& parent_vec : prev_reps) {
+        Subspace16 parent = from_subspace(parent_vec);
+        int last_pivot = parent.size == 0 ? -1 : std::countr_zero(parent.v[parent.size - 1]);
+
+        for (int p_d = last_pivot + 1; p_d < (int)dim; p_d++) {
+            std::vector<int> free_bits;
+            for (int j = p_d + 1; j < (int)dim; j++) {
+                free_bits.push_back(j);
+            }
+            int num_free = free_bits.size();
+            int max_mask = (1 << num_free);
+
+            for (int mask = 0; mask < max_mask; mask++) {
+                U16 v = (1 << p_d);
+                for (int bit = 0; bit < num_free; bit++) {
+                    if ((mask >> bit) & 1) v |= (1 << free_bits[bit]);
+                }
+
+                Subspace16 cand = parent;
+                for (int i = 0; i < cand.size; i++) {
+                    if ((cand.v[i] >> p_d) & 1) cand.v[i] ^= v;
+                }
+                if (cand.size < 16) {
+                    cand.v[cand.size++] = v;
+                }
+
+                SubKey256 key = make_key256(cand);
+                if (visited.count(key)) continue;
+
+                reps.push_back(to_subspace(cand));
+                if (reps.size() > max_reps) {
+                    return reps; // Early exit!
+                }
+
+                // Compute orbit via BFS
+                std::queue<Subspace16> q;
+                q.push(cand);
+                visited.insert(key);
+
+                while (!q.empty()) {
+                    Subspace16 curr = q.front();
+                    q.pop();
+
+                    for (const auto& M : mat_syms) {
+                        Subspace16 next{};
+                        next.size = curr.size;
+                        for (int i = 0; i < curr.size; i++) {
+                            next.v[i] = apply_mat(M, curr.v[i]);
+                        }
+                        next = stack_rref(next);
+                        if (next.size == 0) continue;
+
+                        SubKey256 next_key = make_key256(next);
+                        if (visited.insert(next_key).second) {
+                            q.push(next);
+                        }
+                    }
                 }
             }
         }
@@ -136,23 +296,70 @@ inline std::vector<Subspace> get_subspace_orbit_reps(Tensor& T, size_t dim, int 
     return reps;
 }
 
+inline std::vector<Subspace> get_subspace_orbit_reps(Tensor& T, size_t dim, int axis, size_t d = 2, size_t max_reps = 30) {
+    auto syms = symmetry_generators(T, {}, {}, {});
+    return get_subspace_orbit_reps(syms, dim, axis, d, max_reps);
+}
+
 inline Tensor apply_subspace_substitution(const Tensor& T, const Subspace& S, int axis) {
-    Tensor out = T;
-    Subspace S_mut = S;
-    S_mut = rref(S_mut);
-    S_mut.erase(std::remove(S_mut.begin(), S_mut.end(), 0), S_mut.end());
-    for (size_t i = 0; i < S_mut.size(); i++) {
-        int idx = std::countr_zero(S_mut[i]);
-        int last = out.shape[axis] - 1;
-        out = apply_substitution_no_nf(out, S_mut[i], axis);
-        if (idx != last) {
-            U16 mask = (1 << idx) | (1 << last);
-            for (size_t j = i+1; j < S_mut.size(); j++) {
-                if ((S_mut[j] >> last) & 1) {
-                    S_mut[j] ^= mask;
+    if (S.empty()) return T;
+    Subspace S_rref = rref(S);
+    size_t d = S_rref.size();
+    size_t n = T.shape[axis];
+    if (d >= n) {
+        Tensor empty;
+        empty.shape = T.shape;
+        empty.shape[axis] = 0;
+        return empty;
+    }
+
+    // Find pivot and non-pivot columns
+    std::vector<int> pivots;
+    std::vector<bool> is_pivot(n, false);
+    for (U16 b : S_rref) {
+        int p = std::countr_zero(b);
+        pivots.push_back(p);
+        is_pivot[p] = true;
+    }
+    std::vector<int> non_pivots;
+    for (size_t i = 0; i < n; i++) {
+        if (!is_pivot[i]) non_pivots.push_back(i);
+    }
+
+    // Orient tensor so substitution axis is axis 0
+    Tensor T_rot = T;
+    if (axis == 1) T_rot = T_rot.transpose_AB();
+    else if (axis == 2) T_rot = T_rot.transpose_BC().transpose_AB();
+
+    Tensor T_out;
+    T_out.shape = T_rot.shape;
+    T_out.shape[0] = n - d;
+
+    // Base: non-pivot slices
+    for (size_t k = 0; k < non_pivots.size(); k++) {
+        int src = non_pivots[k];
+        for (int w = 0; w < 4; w++) {
+            T_out.mut_raw()[4 * k + w] = T_rot.raw()[4 * src + w];
+        }
+    }
+
+    // Add pivot slices according to relations in S_rref
+    for (size_t i = 0; i < d; i++) {
+        int p = pivots[i];
+        U16 b = S_rref[i];
+        for (size_t k = 0; k < non_pivots.size(); k++) {
+            int q = non_pivots[k];
+            if ((b >> q) & 1) {
+                for (int w = 0; w < 4; w++) {
+                    T_out.mut_raw()[4 * k + w] ^= T_rot.raw()[4 * p + w];
                 }
             }
         }
     }
-    return out.nf();
+
+    // Rotate back
+    if (axis == 1) T_out = T_out.transpose_AB();
+    else if (axis == 2) T_out = T_out.transpose_AB().transpose_BC();
+
+    return T_out.nf();
 }
