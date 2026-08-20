@@ -202,8 +202,9 @@ U16 apply_symmetry(const std::vector<U64>& sym, U16 vec, size_t dim, int axis) {
 
 std::vector<U16> get_orbit_reps(const std::vector<std::vector<U64>>& symmetries, size_t dim, int axis) {
     std::vector<bool> visited(1 << dim, false);
+    visited[0] = true;
     std::vector<U16> reps;
-    for (size_t v0 = 0; v0 < (1 << dim); v0++) {
+    for (size_t v0 = 1; v0 < (1 << dim); v0++) {
         if (visited[v0]) continue;
         reps.push_back(v0);
         std::vector<U16> orbit;
@@ -227,8 +228,9 @@ std::vector<U16> get_orbit_reps(const std::vector<std::vector<U64>>& symmetries,
 
 std::vector<std::vector<U16>> get_orbits(const std::vector<std::vector<U64>>& symmetries, size_t dim, int axis) {
     std::vector<bool> visited(1 << dim, false);
+    visited[0] = true;
     std::vector<std::vector<U16>> orbits;
-    for (size_t v0 = 0; v0 < (1 << dim); v0++) {
+    for (size_t v0 = 1; v0 < (1 << dim); v0++) {
         if (visited[v0]) continue;
         std::vector<U16> orbit;
         orbit.push_back(v0);
@@ -250,10 +252,14 @@ std::vector<std::vector<U16>> get_orbits(const std::vector<std::vector<U64>>& sy
     return orbits;
 }
 
-std::vector<Term> get_rank1_orbits(Tensor& T) {
+std::vector<Term> get_rank1_orbits(Tensor& T, size_t max_limit = 150) {
     std::vector<Term> rank1_orbits;
     auto symmetries_init = symmetry_generators(T);
     auto orbits_A = get_orbit_reps(symmetries_init, T.shape[0], 0);
+    if (orbits_A.size() > max_limit) {
+        rank1_orbits.resize(max_limit + 1);
+        return rank1_orbits;
+    }
     for (U16 u: orbits_A) {
         if (u==0) continue;
         auto symmetries_locked_u = symmetry_generators(T, {u});
@@ -265,6 +271,9 @@ std::vector<Term> get_rank1_orbits(Tensor& T) {
             for (U16 w: orbits_C) {
                 if (w==0) continue;
                 rank1_orbits.push_back(Term{u,v,w});
+                if (rank1_orbits.size() > max_limit) {
+                    return rank1_orbits;
+                }
             }
         }
     }
