@@ -20,6 +20,7 @@ Scheme::~Scheme(){
 Scheme::Scheme(const Scheme &t) {
   rank = t.rank;
   data = new factor[3*rank];
+  flips = NULL;
   for(int i = 0; i<3*rank; ++i){
     data[i] = t.data[i];
   }

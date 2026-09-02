@@ -192,53 +192,18 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
             std::cout << indent << "├─ Step 4: calling ub(sub) for orbit " << format_orbit(u, axis) << "=0 (axis " << axis << ")\n" << std::flush;
             int sub_conj_rank = ub(sub);
             std::cout << indent << "├─ Step 4: ub(sub) = " << sub_conj_rank << "\n" << std::flush;
-            if (sub_conj_rank >= target_lb && depth == 0) { // maybe depth == 0 is silly, but otherwise it seems to frequently gett stuck here down bad paths...
-                std::cout << indent << "├─ Step 4: Calling recursive topdown_lb (depth=" << depth + 1 << ")\n" << std::flush;
-                if (topdown_lb(sub, target_lb, sub_conj_rank, depth + 1)) {
-                    std::cout << indent << "├─ Step 4: Recursive call returned true, returning true\n" << std::flush;
-                    return true;
-                }
-            }
             min_sub_rank[axis] = std::min(min_sub_rank[axis], sub_conj_rank);
             subs[axis].push_back({sub, sub_conj_rank});
         }
     }
 
-    // (5) If minimum conj_rank across all substitutions for a space is at least target_lb - 1
-    std::cout << indent << "├─ Step 5: checking min_sub_rank = [" << min_sub_rank[0] << ", " 
-              << min_sub_rank[1] << ", " << min_sub_rank[2] << "] (needed >= " << target_lb - 1 << ")\n" << std::flush;
-    std::vector<int> qualifying_axes;
-    for (int axis = 0; axis < 3; axis++) {
-        if (min_sub_rank[axis] >= target_lb - 1 && !subs[axis].empty() && subs[axis].size() <= 15) {
-            qualifying_axes.push_back(axis);
-        }
-    }
-    std::sort(qualifying_axes.begin(), qualifying_axes.end(), [&](int a, int b) {
-        return subs[a].size() < subs[b].size();
-    });
-    for (int axis : qualifying_axes) {
-        std::cout << indent << "├─ Step 5: Branching on axis " << axis << " with " << subs[axis].size() << " subs (target_lb=" << target_lb - 1 << ")\n" << std::flush;
-        bool all_true = true;
-        for (size_t i = 0; i < subs[axis].size(); i++) {
-            std::cout << indent << "├─ Step 5: Testing sub " << (i+1) << "/" << subs[axis].size() << " on axis " << axis << "...\n" << std::flush;
-            if (!topdown_lb(subs[axis][i].first, target_lb - 1, subs[axis][i].second, depth + 1)) {
-                std::cout << indent << "├─ Step 5: Sub " << (i+1) << "/" << subs[axis].size() << " returned false, breaking\n" << std::flush;
-                all_true = false;
-                break;
-            }
-        }
-        if (all_true) {
-            std::cout << indent << "├─ Step 5: All recursive calls on axis " << axis << " returned true, returning true\n" << std::flush;
-            return true;
-        }
-    }
-
-    // (6) We use the generalisation of HK's approach
+    // (5) We use the generalisation of HK's approach (HK-ILP)
     if (symmetries_init.size() >= 2) {
-        std::cout << indent << "├─ Step 6: Using HK's ILP approach (symmetries=" << symmetries_init.size() << ")\n" << std::flush;
+        std::cout << indent << "├─ Step 5 (HK-ILP): Using HK's ILP approach (symmetries=" << symmetries_init.size() << ")\n" << std::flush;
         int r = target_lb - 1;
         std::vector<int> axes_order = {0, 1, 2};
         std::sort(axes_order.begin(), axes_order.end(), [&](int a, int b) {
+            if (min_sub_rank[a] != min_sub_rank[b]) return min_sub_rank[a] > min_sub_rank[b];
             return T.shape[a] < T.shape[b];
         });
         for (int ax : axes_order) {
@@ -251,12 +216,12 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
                 if (!filtered.empty()) vector_orbits.push_back(filtered);
             }
             if (vector_orbits.empty()) continue;
-            if (vector_orbits.size() > 12) {
-                std::cout << indent << "├─ Step 6: Axis " << ax << " has " << vector_orbits.size() << " vector orbits (too fragmented, skipping)\n" << std::flush;
+            if (vector_orbits.size() > 16) {
+                std::cout << indent << "├─ Step 5 (HK-ILP): Axis " << ax << " has " << vector_orbits.size() << " vector orbits (too fragmented, skipping)\n" << std::flush;
                 continue;
             }
             
-            std::cout << indent << "├─ Step 6: Axis " << ax << " has " << vector_orbits.size() << " vector orbits\n" << std::flush;
+            std::cout << indent << "├─ Step 5 (HK-ILP): Axis " << ax << " has " << vector_orbits.size() << " vector orbits\n" << std::flush;
             // Compute the k_i
             std::vector<int> k(vector_orbits.size());
             std::vector<Tensor> subbed_tensors(vector_orbits.size());
@@ -267,12 +232,12 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
                 k[i] = std::max(r-subbed_tensors_ubs[i],0);
             }
             for (int dim = 2; dim < T.shape[ax]; dim++) {
-                std::vector<Subspace> subspace_reps = get_subspace_orbit_reps(symmetries_init, T.shape[ax], ax, dim, 80);
-                if (subspace_reps.empty() || subspace_reps.size() > 80) {
-                    std::cout << indent << "├─ Step 6: Dim " << dim << " on axis " << ax << " has " << subspace_reps.size() << " reps (skipping)\n" << std::flush;
+                std::vector<Subspace> subspace_reps = get_subspace_orbit_reps(symmetries_init, T.shape[ax], ax, dim, 400);
+                if (subspace_reps.empty() || subspace_reps.size() > 400) {
+                    std::cout << indent << "├─ Step 5 (HK-ILP): Dim " << dim << " on axis " << ax << " has " << subspace_reps.size() << " reps (skipping)\n" << std::flush;
                     continue;
                 }
-                std::cout << indent << "├─ Step 6: Checking dim " << dim << " on axis " << ax << " (" << subspace_reps.size() << " subspace reps)...\n" << std::flush;
+                std::cout << indent << "├─ Step 5 (HK-ILP): Checking dim " << dim << " on axis " << ax << " (" << subspace_reps.size() << " subspace reps)...\n" << std::flush;
                 // Compute the substituted tensors and the l_j
                 std::vector<int> l(subspace_reps.size());
                 std::vector<Tensor> subbed_subspace_tensors(subspace_reps.size());
@@ -282,72 +247,113 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
                     subbed_subspace_tensors_ubs[j] = ub(subbed_subspace_tensors[j]);
                     l[j] = std::max(r - subbed_subspace_tensors_ubs[j], 0);
                 }
-                // Build the ILP
+                
                 std::vector<int> curr_k = k;
-                ILP ilp = build_ilp(vector_orbits, subspace_reps, r, curr_k, l);
-                std::vector<int> x;
-                bool feasible = feasibility_rec(ilp, x);
-                if (!feasible) {
-                    std::cout << indent << "├─ Step 6: ILP INFEASIBLE using dimension " << dim << " subspaces on axis " << ax << "! Applying HK Lemma!\n" << std::flush;
-                    // Then we can apply the lemma! Before branching, we should make it as easy as possible by trying to maximise the curr_k and l_j
-                    for (size_t i = 0; i < curr_k.size(); i++) {
-                        while (curr_k[i] < r) {
-                            curr_k[i]++;
-                            ilp = build_ilp(vector_orbits, subspace_reps, r, curr_k, l);
-                            x.clear();
-                            if (feasibility_rec(ilp,x)) {
-                                curr_k[i]--;
-                                break;
-                            }
-                        }
-                    }
-                    for (size_t j = 0; j < l.size(); j++) {
-                        while (l[j] < r) {
-                            l[j]++;
-                            ilp = build_ilp(vector_orbits, subspace_reps, r, curr_k, l);
-                            x.clear();
-                            if (feasibility_rec(ilp,x)) {
-                                l[j]--;
-                                break;
-                            }
-                        }
-                    }
-                    ilp = build_ilp(vector_orbits, subspace_reps, r, curr_k, l);
+                std::vector<int> curr_l = l;
+                bool ilp_verified = false;
 
-                    bool all_refuted = true;
-                    // First we branch on all the 1d substitutions
-                    std::cout << indent << "├─ Step 6: Branching on 1D substitutions...\n" << std::flush;
+                while (true) {
+                    ILP current_ilp = build_ilp(vector_orbits, subspace_reps, r, curr_k, curr_l);
+                    std::vector<int> x;
+                    if (feasibility_rec(current_ilp, x)) {
+                        std::cout << indent << "├─ Step 5 (HK-ILP): Dim " << dim << " ILP feasible, continuing\n" << std::flush;
+                        break;
+                    }
+
+                    // Try to completely eliminate 1D branches by setting k_i = r
+                    for (size_t i = 0; i < curr_k.size(); i++) {
+                        if (curr_k[i] >= r) continue;
+                        int old_k = curr_k[i];
+                        curr_k[i] = r;
+                        auto test_ilp = build_ilp(vector_orbits, subspace_reps, r, curr_k, curr_l);
+                        x.clear();
+                        if (feasibility_rec(test_ilp, x)) {
+                            curr_k[i] = old_k; // Keep bound
+                        }
+                    }
+
+                    // Try to completely eliminate subspace branches by setting l_j = r
+                    for (size_t j = 0; j < curr_l.size(); j++) {
+                        if (curr_l[j] >= r) continue;
+                        int old_l = curr_l[j];
+                        curr_l[j] = r;
+                        auto test_ilp = build_ilp(vector_orbits, subspace_reps, r, curr_k, curr_l);
+                        x.clear();
+                        if (feasibility_rec(test_ilp, x)) {
+                            curr_l[j] = old_l; // Keep bound
+                        }
+                    }
+
+                    // Recursively verify remaining 1D orbit branches
+                    bool branch_failed = false;
                     for (size_t i = 0; i < vector_orbits.size(); i++) {
-                        int new_target = r - curr_k[i];
-                        std::cout << indent << "├─ Step 6: 1D sub " << (i+1) << "/" << vector_orbits.size() 
-                                  << " (target=" << new_target << ", ub=" << subbed_tensors_ubs[i] << ")\n" << std::flush;
-                        if (new_target > 0 && !topdown_lb(subbed_tensors[i], new_target, subbed_tensors_ubs[i], depth + 1)) {
-                            std::cout << indent << "├─ Step 6: Recursive call returned false, breaking\n" << std::flush;
-                            all_refuted = false;
+                        int target = r - curr_k[i];
+                        if (target <= 0) continue;
+                        std::cout << indent << "├─ Step 5 (HK-ILP): Verifying 1D branch " << i << " target " << target << "...\n" << std::flush;
+                        if (!topdown_lb(subbed_tensors[i], target, subbed_tensors_ubs[i], depth + 1)) {
+                            std::cout << indent << "├─ Step 5 (HK-ILP): 1D branch " << i << " target " << target << " failed, relaxing target to " << target - 1 << "\n" << std::flush;
+                            curr_k[i]++;
+                            branch_failed = true;
                             break;
                         }
                     }
-                    if (all_refuted) {
-                        std::cout << indent << "├─ Step 6: All 1D substitutions refuted, branching on " << dim <<"D substitutions...\n" << std::flush;
-                        for (size_t j = 0; j < subspace_reps.size(); j++) {
-                            int new_target = r - l[j];
-                            std::cout << indent << "├─ Step 6: " << dim << "D sub " << (j+1) << "/" << subspace_reps.size() 
-                                      << " (target=" << new_target << ", ub=" << subbed_subspace_tensors_ubs[j] << ")\n" << std::flush;
-                            if (new_target > 0 && !topdown_lb(subbed_subspace_tensors[j], new_target, subbed_subspace_tensors_ubs[j], depth + 1)) {
-                                std::cout << indent << "├─ Step 6: Recursive call returned false, breaking\n" << std::flush;
-                                all_refuted = false;
-                                break;
-                            }
+                    if (branch_failed) continue;
+
+                    // Recursively verify remaining dD subspace branches
+                    for (size_t j = 0; j < subspace_reps.size(); j++) {
+                        int target = r - curr_l[j];
+                        if (target <= 0) continue;
+                        std::cout << indent << "├─ Step 5 (HK-ILP): Verifying dim " << dim << " subspace branch " << j << " target " << target << "...\n" << std::flush;
+                        if (!topdown_lb(subbed_subspace_tensors[j], target, subbed_subspace_tensors_ubs[j], depth + 1)) {
+                            std::cout << indent << "├─ Step 5 (HK-ILP): Subspace branch " << j << " target " << target << " failed, relaxing target to " << target - 1 << "\n" << std::flush;
+                            curr_l[j]++;
+                            branch_failed = true;
+                            break;
                         }
                     }
-                    if (all_refuted) {
-                        std::cout << indent << "├─ Step 6: All branches refuted, returning true\n" << std::flush;
-                        return true;
-                    }
-                } else {
-                    std::cout << indent << "├─ Step 6: Dim " << dim << " ILP feasible, continuing\n" << std::flush;
+                    if (branch_failed) continue;
+
+                    ilp_verified = true;
+                    break;
+                }
+
+                if (ilp_verified) {
+                    std::cout << indent << "├─ Step 5 (HK-ILP): All HK-ILP branches verified! Rank >= " << target_lb << " PROVED!\n" << std::flush;
+                    return true;
                 }
             }
+        }
+    }
+
+    // (6) If minimum conj_rank across all substitutions for a space is at least target_lb - 1
+    std::cout << indent << "├─ Step 6 (Affine Branching): checking min_sub_rank = [" << min_sub_rank[0] << ", " 
+              << min_sub_rank[1] << ", " << min_sub_rank[2] << "] (needed >= " << target_lb - 1 << ")\n" << std::flush;
+    std::vector<int> qualifying_axes;
+    for (int axis = 0; axis < 3; axis++) {
+        if (min_sub_rank[axis] >= target_lb - 1 && !subs[axis].empty() && subs[axis].size() <= 15) {
+            qualifying_axes.push_back(axis);
+        }
+    }
+    std::sort(qualifying_axes.begin(), qualifying_axes.end(), [&](int a, int b) {
+        if (min_sub_rank[a] != min_sub_rank[b]) {
+            return min_sub_rank[a] > min_sub_rank[b];
+        }
+        return subs[a].size() < subs[b].size();
+    });
+    for (int axis : qualifying_axes) {
+        std::cout << indent << "├─ Step 6 (Affine Branching): Branching on axis " << axis << " with " << subs[axis].size() << " subs (target_lb=" << target_lb - 1 << ")\n" << std::flush;
+        bool all_true = true;
+        for (size_t i = 0; i < subs[axis].size(); i++) {
+            std::cout << indent << "├─ Step 6 (Affine Branching): Testing sub " << (i+1) << "/" << subs[axis].size() << " on axis " << axis << "...\n" << std::flush;
+            if (!topdown_lb(subs[axis][i].first, target_lb - 1, subs[axis][i].second, depth + 1)) {
+                std::cout << indent << "├─ Step 6 (Affine Branching): Sub " << (i+1) << "/" << subs[axis].size() << " returned false, breaking\n" << std::flush;
+                all_true = false;
+                break;
+            }
+        }
+        if (all_true) {
+            std::cout << indent << "├─ Step 6 (Affine Branching): All recursive calls on axis " << axis << " returned true, returning true\n" << std::flush;
+            return true;
         }
     }
 
@@ -510,7 +516,7 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
         }
     }
 
-    std::cout << indent << "├─ Step 8: some rank1 orbit didn't pan out, continuing\n" << std::flush;
+    std::cout << indent << "├─ Step 8: All rank1 orbit branches returned true!\n" << std::flush;
 
     // If step 8 loop finished successfully, all branches returned true.
     return true;

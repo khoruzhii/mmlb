@@ -8,6 +8,7 @@
 #include <queue>
 #include <unordered_set>
 #include <algorithm>
+#include <cmath>
 
 // basic use of subspaces
 
@@ -177,7 +178,7 @@ inline Subspace16 from_subspace(const Subspace& s) {
     return out;
 }
 
-// Gaussian binomial coefficient [n, k]_2
+// Counts the size of the Grassmannian. Used for heuristics, so we don't mind a small amount of float errors
 inline double gaussian_binomial_2(int n, int k) {
     if (k < 0 || k > n) return 0.0;
     if (k == 0 || k == n) return 1.0;
@@ -199,7 +200,7 @@ inline std::vector<Subspace> get_subspace_orbit_reps(
     // Early mathematical orbit count lower bound: Total subspaces / |G|
     double total_subspaces = gaussian_binomial_2((int)dim, (int)target_d);
     double group_size = syms.empty() ? 1.0 : (double)syms.size();
-    if (total_subspaces / group_size > (double)max_reps) {
+    if (total_subspaces / group_size > (double)max_reps) { // too many subspaces to enumerate, abort
         return std::vector<Subspace>(max_reps + 1);
     }
     if (target_d == 1) {
