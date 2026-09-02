@@ -117,8 +117,10 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
 
     // (3) Simple Forced Products i.e using a substitution to do a forced product without branching
     std::cout << indent << "├─ Step 3: Checking simple forced products\n" << std::flush;
-    auto fps = find_forced_products(T);
-    
+    auto [fps1, fps2] = find_forced_products(T);
+    auto fps = fps1;
+    fps.insert(fps.end(), fps2.begin(), fps2.end());
+
     for (int fp_ax = 0; fp_ax < 3; fp_ax++) {
         std::vector<ForcedProduct> axis_fps;
         for (auto& fp : fps) if (fp.axis == fp_ax) axis_fps.push_back(fp);
@@ -355,7 +357,7 @@ inline bool topdown_lb_internal(Tensor T, int target_lb, int conj_rank, int dept
     std::cout << indent << "├─ Step 7: Branching forced products\n" << std::flush;
     for (int ax = 0; ax < 3; ax++) {
         std::vector<ForcedProduct> axis_fps;
-        for (auto& fp : fps) if (fp.axis == ax) axis_fps.push_back(fp);
+        for (auto& fp : fps1) if (fp.axis == ax) axis_fps.push_back(fp);
         
         int N = axis_fps.size();
         if (N == 0) continue;

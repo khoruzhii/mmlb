@@ -24,8 +24,10 @@ struct ForcedProduct {
 };
 
 // Only in standard basis for now, potential for improvement in future...
-inline std::vector<ForcedProduct> find_forced_products(const Tensor& T) {
-    std::vector<ForcedProduct> fps;
+inline std::pair<std::vector<ForcedProduct>, std::vector<ForcedProduct>> find_forced_products(const Tensor& T) {
+    std::vector<ForcedProduct> fps1;
+    std::vector<ForcedProduct> fps2;
+    std::array<std::vector<U16>, 3> axis_factors;
     
     Tensor T_transposed;
 
@@ -33,7 +35,6 @@ inline std::vector<ForcedProduct> find_forced_products(const Tensor& T) {
         if (axis == 0) T_transposed = T;
         if (axis == 1) T_transposed = T.transpose_AB();
         else if (axis == 2) T_transposed = T.transpose_BC().transpose_AB();
-
 
         for (size_t i = 0; i < T_transposed.shape[0]; i++) {
             U16 v = 0;
@@ -55,13 +56,54 @@ inline std::vector<ForcedProduct> find_forced_products(const Tensor& T) {
             }
             if (v != 0) {
                 switch (axis) {
-                    case 0: fps.push_back({0, (int)i, { (U16)(1 << i), w, v }}); break;
-                    case 1: fps.push_back({1, (int)i, { w, (U16)(1 << i), v }}); break;
-                    case 2: fps.push_back({2, (int)i, { w, v, (U16)(1 << i) }}); break;
+                    case 0: 
+                        fps1.push_back({0, (int)i, { (U16)(1 << i), w, v }}); 
+                        break;
+                    case 1: 
+                        fps1.push_back({1, (int)i, { w, (U16)(1 << i), v }}); 
+                        break;
+                    case 2: 
+                        fps1.push_back({2, (int)i, { w, v, (U16)(1 << i) }});
+                        break;
+                }
+            }
+        }
+
+        for (size_t i = 0; i < T_transposed.shape[0]; i++) {
+            for (size_t j = i+1; j < T_transposed.shape[0]; j++) {
+                U16 v = 0;
+                U16 w = 0;
+                for (size_t k = 0; k < T_transposed.shape[1]; k++) {
+                    U16 row = T_transposed.get_row(i, k) ^ T_transposed.get_row(j, k);
+                    if (row != 0) {
+                        if (v == 0) {
+                            v = row;
+                            w = (1 << k);
+                        } else {
+                            if (row != v) {
+                                v = 0;
+                                break;
+                            }
+                            w |= (1 << k);
+                        }
+                    }
+                }
+                if (v != 0) {
+                    switch (axis) {
+                        case 0: 
+                            fps2.push_back({0, (int)i, { (U16)((1 << i) | (1 << j)), w, v }}); 
+                            break;
+                        case 1: 
+                            fps2.push_back({1, (int)i, { w, (U16)((1 << i) | (1 << j)), v }});
+                            break;
+                        case 2: 
+                            fps2.push_back({2, (int)i, { w, v, (U16)((1 << i) | (1 << j)) }});
+                            break;
+                    }
                 }
             }
         }
     }
 
-    return fps;
+    return {fps1, fps2};
 }
